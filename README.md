@@ -61,6 +61,96 @@ podman run --rm -p 8080:8080 \
   rhoim:latest
 ```
 
+## Bootc VM image (off‑Kubernetes)
+
+Requirements:
+- Podman (rootful mode) and `quay.io/centos-bootc/bootc-image-builder:latest`
+- QEMU to boot the qcow2 locally (or use the generated VMDK/OVF in another hypervisor)
+
+### 1) Build the bootc container image
+```bash
+cd /Users/olgalavtar/repos/rhoim
+podman build -t localhost/rhoim-bootc:latest -f deploy/bootc/Containerfile .
+```
+
+On macOS, ensure Podman machine is rootful:
+```bash
+podman machine stop
+podman machine set --rootful=true
+podman machine start
+```
+
+### 2) Create a qcow2 with bootc-image-builder
+```bash
+mkdir -p image
+podman run --rm --privileged \
+  -v /var/lib/containers/storage:/var/lib/containers/storage \
+  -v "$PWD/image":/output \
+  quay.io/centos-bootc/bootc-image-builder:latest \
+  --type qcow2 \
+  localhost/rhoim-bootc:latest
+```
+Artifacts will be created under `./image/` (e.g., `image/qcow2/disk.qcow2`).
+
+### 3) Boot the VM
+- Apple Silicon (ARM64) – recommended to build and run natively:
+  ```bash
+  podman build --platform linux/arm64 -t localhost/rhoim-bootc:arm64 -f deploy/bootc/Containerfile .
+  rm -rf image && mkdir -p image
+  podman run --rm --privileged \
+    -v /var/lib/containers/storage:/var/lib/containers/storage \
+    -v "$PWD/image":/output \
+    quay.io/centos-bootc/bootc-image-builder:latest \
+    --type qcow2 \
+    --target-arch aarch64 \
+    localhost/rhoim-bootc:arm64
+  BIOS="$(brew --prefix qemu)/share/qemu/edk2-aarch64-code.fd"
+  qemu-system-aarch64 -accel hvf -machine virt -cpu host \
+    -m 8G -smp 4 -bios "$BIOS" \
+    -drive if=virtio,format=qcow2,file="$PWD/image/qcow2/disk.qcow2" \
+    -netdev user,id=n1,hostfwd=tcp::8080-:8080,hostfwd=tcp::8000-:8000 \
+    -device virtio-net-pci,netdev=n1 -serial mon:stdio
+  ```
+- x86_64 (Intel/AMD):
+  ```bash
+  BIOS_X64="$(brew --prefix qemu)/share/qemu/edk2-x86_64-code.fd"
+  qemu-system-x86_64 -m 8G -smp 4 \
+    -bios "$BIOS_X64" \
+    -drive if=virtio,format=qcow2,file="$PWD/image/qcow2/disk.qcow2" \
+    -net nic,model=virtio -net user,hostfwd=tcp::8080-:8080,hostfwd=tcp::8000-:8000 \
+    -serial mon:stdio
+  ```
+
+### 4) Test the endpoints
+```bash
+# vLLM (lists models when ready)
+curl http://localhost:8000/v1/models
+
+# Gateway
+curl http://localhost:8080/healthz
+curl -H "Authorization: Bearer devkey1" -H 'Content-Type: application/json' \
+  --data '{"model":"TinyLlama/TinyLlama-1.1B-Chat-v1.0","messages":[{"role":"user","content":"hello"}]}' \
+  http://localhost:8080/api/rhoai/v1/chat/completions
+```
+
+### Pre‑pull the model (optional, faster first boot)
+Set these in `deploy/bootc/rhoim.env`:
+```bash
+MODEL_SOURCE=hf://TinyLlama/TinyLlama-1.1B-Chat-v1.0
+MODEL_URI=/models/tinyllama
+```
+Then rebuild the bootc image and qcow2.
+
+### Troubleshooting
+- If `curl :8080` resets, wait 1–3 min for first download or pre‑pull the model.
+- Check logs inside the VM:
+  ```bash
+  journalctl -u rhoim-model-pull -e
+  journalctl -u rhoim-vllm -e
+  journalctl -u rhoim-gateway -e
+  ```
+- On macOS, ensure QEMU is installed (`brew install qemu`) and Podman is rootful.
+
 ### Single-image workflow (only one image)
 ```bash
 # Build only the single appliance image locally
