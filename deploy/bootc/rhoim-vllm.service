@@ -4,8 +4,13 @@ After=network-online.target
 
 [Service]
 Type=simple
-# NEW: ExecStart calls the initializer script
+# Load environment variables from config file
+EnvironmentFile=-/etc/sysconfig/rhoim
+# ExecStart calls the initializer script
 ExecStart=/usr/local/bin/initializer-entrypoint.sh
+# Redirect output to console for debugging
+StandardOutput=journal+console
+StandardError=journal+console
 Restart=always
 RestartSec=10
 

@@ -1,63 +1,148 @@
-# Start with a suitable base image for UBI and bootc
-FROM registry.access.redhat.com/ubi9/ubi-minimal:latest
+# =============================================================================
+# RHOIM Bootc Containerfile - vLLM Model Serving
+# =============================================================================
+#
+# This Containerfile creates a bootc-compatible image for serving LLM models
+# using vLLM with support for both CPU and GPU modes.
+#
+# Base Image: registry.redhat.io/rhel9/rhel-bootc:latest
+#   - Red Hat RHEL 9 Bootc base image with bootc tools pre-installed
+#   - RHEL 9 based (compatible with RHAIIS ecosystem)
+#   - Requires Red Hat registry authentication (podman login registry.redhat.io)
+#   - We install vLLM, PyTorch with CUDA support, and configure systemd service
+#   - Supports both CPU and GPU modes via VLLM_DEVICE_TYPE environment variable
+#
+# =============================================================================
+# BUILD INSTRUCTIONS
+# =============================================================================
+#
+# IMPORTANT: For bootc VM compatibility, build on Linux x86_64:
+#   podman build --platform linux/amd64 -t localhost/rhoim-bootc:latest \
+#     -f deploy/bootc/Containerfile .
+#
+# Note: Building on macOS ARM64 with QEMU emulation may cause segmentation
+#       faults. For production bootc images, build on Linux x86_64.
+#
+# =============================================================================
+# RUNTIME CONFIGURATION
+# =============================================================================
+#
+# The image supports both CPU and GPU modes via the VLLM_DEVICE_TYPE
+# environment variable. No rebuild is required - the same image works for both.
+#
+# CPU Mode (Default - for testing):
+#   - VLLM_DEVICE_TYPE=cpu
+#   - Runs TinyLlama model for local testing
+#   - Works without GPU hardware
+#   - Uses float32 dtype and enforce-eager mode
+#
+# GPU Mode (Production):
+#   - VLLM_DEVICE_TYPE=cuda
+#   - Uses NVIDIA GPU when available
+#   - Auto-detects GPU via CUDA
+#   - Uses auto dtype for optimal performance
+#
+# =============================================================================
+# OVERRIDING CONFIGURATION AT RUNTIME
+# =============================================================================
+#
+# You can change VLLM_DEVICE_TYPE at runtime without rebuilding:
+#
+# 1. Environment variable (container runtime):
+#    podman run -e VLLM_DEVICE_TYPE=cuda ...
+#
+# 2. Edit config file (in running container/VM):
+#    Edit /etc/sysconfig/rhoim and change VLLM_DEVICE_TYPE="cuda"
+#    Then: systemctl restart rhoim-vllm.service
+#
+# 3. Systemd override:
+#    systemctl edit rhoim-vllm.service
+#    Add: Environment="VLLM_DEVICE_TYPE=cuda"
+#    Then: systemctl restart rhoim-vllm.service
+#
+# 4. At bootc install time:
+#    bootc install --env VLLM_DEVICE_TYPE=cuda ...
+#
+# =============================================================================
+# ENVIRONMENT VARIABLES
+# =============================================================================
+#
+# Core Configuration (can be overridden at runtime):
+#   - VLLM_DEVICE_TYPE: "cpu" (default) or "cuda" for GPU
+#   - MODEL_ID: HuggingFace model ID (default: TinyLlama/TinyLlama-1.1B-Chat-v1.0)
+#   - MODEL_PATH: Local model path (default: /opt/app-root/models)
+#   - VLLM_PORT: vLLM API port (default: 8000)
+#   - VLLM_HOST: vLLM bind address (default: 0.0.0.0)
+#
+# Configuration file: /etc/sysconfig/rhoim
+#   - Can be edited at runtime to change settings
+#   - Changes require service restart: systemctl restart rhoim-vllm.service
+#
+# =============================================================================
+# SERVICES
+# =============================================================================
+#
+# The image includes a systemd service that automatically starts vLLM:
+#   - Service: rhoim-vllm.service
+#   - Starts on boot via systemd
+#   - Uses /usr/local/bin/initializer-entrypoint.sh to configure and start vLLM
+#   - Automatically handles CPU/GPU mode based on VLLM_DEVICE_TYPE
+#
+# =============================================================================
 
-# --- Configuration ---
+# Use Red Hat RHEL 9 Bootc base image (includes bootc tools)
+# Requires authentication: podman login registry.redhat.io
+FROM registry.redhat.io/rhel9/rhel-bootc:latest
+
+# RHEL bootc image already has Python 3.9 installed
+# Install pip using ensurepip (no DNF repos needed)
+# Install minimal packages that might be available or use alternatives
+RUN python3 -m ensurepip --upgrade || \
+    (curl -sSL https://bootstrap.pypa.io/get-pip.py | python3) || \
+    (curl -sSL https://bootstrap.pypa.io/get-pip.py -o /tmp/get-pip.py && python3 /tmp/get-pip.py)
+
+# Install PyTorch with CUDA support and vLLM runtime
+# Note: PyTorch CUDA wheels support both CPU and GPU modes
+# For GPU nodes, vLLM will need CUDA and host NVIDIA drivers available
+# IMPORTANT: For production builds, use --platform linux/amd64 on Linux x86_64
+# Building on macOS ARM64 with QEMU emulation may cause segmentation faults
+# Upgrade pip first, then install packages
+# Use --ignore-installed to avoid conflicts with rpm-installed packages
+ENV PIP_DISABLE_PIP_VERSION_CHECK=1
+RUN python3 -m pip install --no-cache-dir --upgrade pip setuptools wheel \
+    && python3 -m pip install --no-cache-dir --ignore-installed torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121 \
+    && python3 -m pip install --no-cache-dir --ignore-installed vllm transformers sentencepiece fastapi uvicorn[standard]
+
+# --- Default Configuration (can be overridden at runtime) ---
+# Device type: "cpu" for testing, "cuda" for GPU (can be changed at runtime)
+ENV VLLM_DEVICE_TYPE=cpu
+
+# Model configuration
 ENV MODEL_ID="TinyLlama/TinyLlama-1.1B-Chat-v1.0"
-ENV MODEL_PATH="/opt-app-root/models"
+ENV MODEL_PATH="/opt/models"
 ENV VLLM_PORT="8000"
 ENV VLLM_HOST="0.0.0.0"
 ENV PYTHONUNBUFFERED=1
-ENV VENV_PATH=/opt-app-root/venv
-ENV VLLM_NO_CUDA="1"
 
-# 1. Install necessary system packages for runtime and build tools
-# 🔥 FIX 1: Added 'kmod' (which provides the 'lsmod' command)
-RUN microdnf update -y && microdnf install -y \
-    gcc git tar gzip systemd procps-ng iproute kmod \
-    \
-    # Install Python 3.11 and development packages directly
-    && microdnf install -y python3.11 python3.11-pip python3.11-devel \
-    \
-    && microdnf clean all
-
-# 2. Setup Python Virtual Environment
-# Use the explicit python3.11 executable
-RUN /usr/bin/python3.11 -m venv $VENV_PATH
-ENV PATH="$VENV_PATH/bin:$PATH"
-
-# 3. Install Python Dependencies
-# Path updated to be relative to the build root
-COPY deploy/bootc/requirements.txt .
-
-# 🔥 FIX 2: Pre-install build-time dependencies (numpy and wheel)
-RUN pip install --no-cache-dir wheel numpy \
-    --index-url https://download.pytorch.org/whl/cpu \
-    --extra-index-url https://pypi.org/simple
-
-# Now, install the actual requirements
-RUN pip install --no-cache-dir -r requirements.txt \
-    --index-url https://download.pytorch.org/whl/cpu \
-    --extra-index-url https://pypi.org/simple
-    
-# 4. Create model directory and expose port
+# --- Create model directory and expose ports ---
 RUN mkdir -p $MODEL_PATH
 EXPOSE 8000
-EXPOSE 8080
 
-# 5. Add Systemd service components (VLLM and Gateway)
-# All paths updated to be relative to the build root
+# --- Add Systemd service for vLLM ---
+# Copy environment configuration file (can be edited at runtime)
 COPY deploy/bootc/rhoim.env /etc/sysconfig/rhoim
 
-# Copy and enable the VLLM model serving service
+# Copy systemd service unit
 COPY deploy/bootc/rhoim-vllm.service /etc/systemd/system/rhoim-vllm.service
-COPY deploy/bootc/initializer-entrypoint.sh /usr/local/bin/initializer-entrypoint.sh
-RUN chmod +x /usr/local/bin/initializer-entrypoint.sh
-RUN systemctl enable rhoim-vllm.service
 
-# Copy and enable the RHOIM Gateway service (This path is correct relative to root)
-COPY gateway/app /opt/rhoim/gateway
-COPY deploy/bootc/rhoim-gateway.service /etc/systemd/system/rhoim-gateway.service
-RUN systemctl enable rhoim-gateway.service
+# Copy and set permissions for vLLM initializer script
+# This script reads VLLM_DEVICE_TYPE and configures vLLM accordingly
+COPY --chmod=755 deploy/bootc/initializer-entrypoint.sh /usr/local/bin/initializer-entrypoint.sh
 
-# 6. Final Command: Initialize Systemd (Mandatory for bootc)
+# Enable service at boot (bootc-friendly: create wants symlink)
+RUN mkdir -p /etc/systemd/system/multi-user.target.wants \
+    && ln -sf /etc/systemd/system/rhoim-vllm.service /etc/systemd/system/multi-user.target.wants/rhoim-vllm.service
+
+# --- Final Command: Initialize Systemd (Mandatory for bootc) ---
+# Bootc images must run systemd as PID 1
 CMD ["/sbin/init"]
