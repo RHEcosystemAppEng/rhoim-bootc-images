@@ -1,0 +1,146 @@
+# =============================================================================
+# RHOIM Bootc Containerfile - vLLM Model Serving (UBI-based, CPU)
+# =============================================================================
+#
+# This Containerfile creates a bootc-compatible image for serving LLM models
+# using vLLM with CPU support. Builds vLLM from source since pre-built wheels
+# don't include CPU platform support.
+#
+# Base Image: registry.access.redhat.com/ubi9/ubi-init:latest
+#   - Red Hat Universal Base Image with systemd support
+#   - UBI images have preconfigured repositories (no subscription required)
+#   - Easy package installation via dnf/yum
+#   - Can optionally register with subscription-manager for RHEL repos
+#
+# =============================================================================
+# BUILD INSTRUCTIONS
+# =============================================================================
+#
+# Build the container image:
+#   podman build -t localhost/rhoim-bootc-ubi:latest \
+#     -f deploy/bootc-ubi/Containerfile .
+#
+# Build bootc VM image (qcow2):
+#   podman run --rm --privileged \
+#     -v /var/lib/containers/storage:/var/lib/containers/storage \
+#     -v "$(pwd)/images":/output \
+#     quay.io/centos-bootc/bootc-image-builder:latest \
+#     --type qcow2 \
+#     localhost/rhoim-bootc-ubi:latest
+#
+# =============================================================================
+# RUNTIME CONFIGURATION
+# =============================================================================
+#
+# CPU Mode:
+#   - Works without GPU hardware
+#   - Uses CPU-only PyTorch and vLLM built from source
+#   - Model is automatically downloaded by vLLM from HuggingFace
+#   - Performance will be slower than GPU but suitable for development/testing
+#
+# Configuration via environment variables (set in systemd service or override):
+#   - VLLM_MODEL: HuggingFace model ID (default: TinyLlama/TinyLlama-1.1B-Chat-v1.0)
+#   - HOST: vLLM bind address (default: 0.0.0.0)
+#   - PORT: vLLM API port (default: 8000)
+#   - DTYPE: Data type (default: float32 for CPU)
+#   - VLLM_EXTRA_ARGS: Additional vLLM arguments
+#
+# =============================================================================
+
+# Use UBI Init image (includes systemd for bootc compatibility)
+FROM registry.access.redhat.com/ubi9/ubi-init:latest
+
+# --- Build Arguments ---
+# No version pinning - let pip install latest compatible versions
+
+# --- Configuration ---
+ENV VLLM_MODEL="TinyLlama/TinyLlama-1.1B-Chat-v1.0"
+ENV HOST="0.0.0.0"
+ENV PORT="8000"
+ENV DTYPE="float32"
+ENV VLLM_EXTRA_ARGS=""
+ENV PYTHONUNBUFFERED=1
+ENV PIP_DISABLE_PIP_VERSION_CHECK=1
+
+# 1. Install system packages, Python 3.11, build tools, and bootc tools
+# Try to enable CRB (CodeReady Builder) repo for Python 3.11
+# CRB might be available for UBI without subscription
+# Install build tools needed for building vLLM from source
+# Install bootc tools to make image bootc-compatible
+RUN dnf -y install --allowerasing \
+         dnf-plugins-core \
+         ca-certificates \
+         bash \
+         curl \
+         jq \
+         gcc \
+         gcc-c++ \
+         make \
+         cmake \
+         ninja-build \
+         git \
+    && dnf -y config-manager --set-enabled crb || echo "CRB repo not available" \
+    && (dnf -y install numactl numactl-devel || dnf -y install libnuma libnuma-devel || echo "NUMA libraries not available, will try to build without them") \
+    && (dnf -y install bootc || echo "bootc package not available in UBI repos") \
+    && update-ca-trust \
+    && dnf clean all
+
+# Try to install Python 3.11 from CRB or AppStream (including development headers)
+RUN (dnf -y install python3.11 python3.11-pip python3.11-devel && echo "Python 3.11 installed successfully") || \
+    (echo "Python 3.11 not found in CRB, checking AppStream..." && \
+     dnf -y install python3.11 python3.11-pip python3.11-devel || \
+     (echo "Python 3.11 not available. Falling back to Python 3.9." && \
+      dnf -y install python3 python3-pip python3-devel))
+
+# 2. Setup Python Virtual Environment (use python3.11 if available, otherwise python3)
+RUN if command -v python3.11 &> /dev/null; then \
+        python3.11 -m venv /opt/vllm-venv && echo "Using Python 3.11"; \
+    else \
+        python3 -m venv /opt/vllm-venv && echo "Using Python 3.9"; \
+    fi
+ENV PATH="/opt/vllm-venv/bin:$PATH"
+
+# 3. Install PyTorch (CPU-only) and build vLLM from source with CPU support
+# Pre-built wheels don't have CPU platform support - must build from source
+RUN pip install --no-cache-dir --upgrade pip setuptools wheel packaging ninja numpy \
+    && pip install --no-cache-dir --index-url https://download.pytorch.org/whl/cpu torch
+
+# Build vLLM from source with CPU support (required for RHEL/UBI CPU mode)
+# Download vLLM source as tarball (more reliable than git clone)
+# Verify compilers are available and set compiler environment variables for CMake
+RUN which gcc && which g++ && which cmake && gcc --version && g++ --version && cmake --version \
+    && curl -L https://github.com/vllm-project/vllm/archive/refs/tags/v0.11.0.tar.gz | tar -xzf - -C /tmp \
+    && mv /tmp/vllm-0.11.0 /tmp/vllm \
+    && cd /tmp/vllm \
+    && pip install -r requirements/build.txt \
+    && pip install -r requirements/cpu.txt --extra-index-url https://download.pytorch.org/whl/cpu \
+    && find . -type f \( -name "*.py" -o -name "CMakeLists.txt" -o -name "*.cmake" \) -exec sed -i 's/-lnuma//g' {} + 2>/dev/null || true \
+    && mkdir -p /tmp/numa_stub \
+    && printf '#include <stdlib.h>\nint numa_available(void) { return -1; }\nvoid* numa_alloc_onnode(size_t size, int node) { return malloc(size); }\nvoid numa_free(void *start, size_t size) { free(start); }\nint numa_node_of_cpu(int cpu) { return 0; }\nvoid numa_run_on_node(int node) {}\n' > /tmp/numa_stub/numa_stub.c \
+    && gcc -shared -fPIC -o /tmp/numa_stub/libnuma.so /tmp/numa_stub/numa_stub.c 2>/dev/null || true \
+    && CC=/usr/bin/gcc CXX=/usr/bin/g++ CXXFLAGS="-Wno-error -Wno-psabi -DVLLM_NUMA_DISABLED" LDFLAGS="-Wl,--as-needed -L/tmp/numa_stub" CMAKE_BUILD_PARALLEL_LEVEL=2 SETUPTOOLS_SCM_PRETEND_VERSION=0.11.0 VLLM_TARGET_DEVICE=cpu pip install --no-cache-dir . \
+    && cd / \
+    && rm -rf /tmp/vllm
+
+# Install additional runtime dependencies
+RUN pip install --no-cache-dir transformers sentencepiece fastapi uvicorn[standard]
+
+# 4. Expose vLLM port
+EXPOSE 8000
+
+# 5. Copy startup script and systemd service
+COPY deploy/bootc-ubi/initializer-entrypoint.sh /usr/local/bin/start-vllm
+RUN chmod +x /usr/local/bin/start-vllm
+
+COPY deploy/bootc-ubi/rhoim-vllm.service /usr/lib/systemd/system/vllm.service
+
+# 6. Enable service at boot (bootc-friendly: create wants symlink)
+RUN mkdir -p /etc/systemd/system/multi-user.target.wants \
+    && ln -sf /usr/lib/systemd/system/vllm.service /etc/systemd/system/multi-user.target.wants/vllm.service
+
+# 7. Add bootc labels to make image recognized as bootc-compatible
+LABEL org.osbuild.bootc=true
+LABEL bootc=true
+
+# 8. Final Command: Initialize Systemd (Mandatory for bootc)
+CMD ["/sbin/init"]

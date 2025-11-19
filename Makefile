@@ -61,3 +61,16 @@ helm-install:
 
 helm-uninstall:
 	helm uninstall rhoim -n $(NS) || true
+
+# Bootc UBI-based builds (CPU-only)
+build-bootc-ubi:
+	podman build -t localhost/rhoim-bootc-ubi:$(TAG) -f deploy/bootc-ubi/Containerfile .
+
+build-bootc-image-ubi: build-bootc-ubi
+	mkdir -p $(IMAGEDIR)
+	podman run --rm --privileged \
+		-v /var/lib/containers/storage:/var/lib/containers/storage \
+		-v "$(PWD)/$(IMAGEDIR)":/output \
+		quay.io/centos-bootc/bootc-image-builder:latest \
+		--type qcow2 \
+		localhost/rhoim-bootc-ubi:$(TAG)
