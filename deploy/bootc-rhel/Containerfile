@@ -88,25 +88,34 @@ ARG RHN_ACTIVATION_KEY
 ARG VLLM_VERSION=0.11.0
 ARG PYTHON_VERSION=3.11
 
-# Register system with Red Hat subscription (if credentials provided)
-RUN if [ -n "$RHN_USERNAME" ] && [ -n "$RHN_PASSWORD" ]; then \
-        echo "Registering system with Red Hat subscription using username/password..." && \
-        subscription-manager register --username="$RHN_USERNAME" --password="$RHN_PASSWORD" --auto-attach && \
-        subscription-manager attach --auto || \
-        (echo "Registration with username/password failed, trying activation key..." && \
-         [ -n "$RHN_ORG_ID" ] && [ -n "$RHN_ACTIVATION_KEY" ] && \
-         subscription-manager register --org="$RHN_ORG_ID" --activationkey="$RHN_ACTIVATION_KEY" --force); \
+# Register system with Red Hat subscription (REQUIRED for package installation)
+# 
+# RECOMMENDED for EC2: Register the host first, then mount certificates:
+#   podman build -v /etc/pki/entitlement:/etc/pki/entitlement:ro -v /etc/rhsm:/etc/rhsm:ro ...
+#
+# Alternative: Register directly in container (may fail due to container mode detection)
+RUN if [ -d /etc/pki/entitlement ] && [ -n "$(ls -A /etc/pki/entitlement/*.pem 2>/dev/null)" ]; then \
+        echo "Using mounted host subscription certificates" && \
+        export SMDEV_CONTAINER_OFF=1 && \
+        subscription-manager refresh && \
+        subscription-manager repos --disable='*-debug-rpms' && \
+        subscription-manager repos --enable codeready-builder-for-rhel-9-$(uname -m)-rpms; \
     elif [ -n "$RHN_ORG_ID" ] && [ -n "$RHN_ACTIVATION_KEY" ]; then \
-        echo "Registering system with Red Hat subscription using activation key..." && \
-        subscription-manager register --org="$RHN_ORG_ID" --activationkey="$RHN_ACTIVATION_KEY" --force; \
+        echo "Registering with activation key..." && \
+        subscription-manager register --org="$RHN_ORG_ID" --activationkey="$RHN_ACTIVATION_KEY" --force || \
+        (echo "Registration failed. On EC2, register the host first and mount certificates." && exit 1) && \
+        subscription-manager repos --disable='*-debug-rpms' && \
+        subscription-manager repos --enable codeready-builder-for-rhel-9-$(uname -m)-rpms; \
+    elif [ -n "$RHN_USERNAME" ] && [ -n "$RHN_PASSWORD" ]; then \
+        echo "Registering with username/password..." && \
+        subscription-manager register --username="$RHN_USERNAME" --password="$RHN_PASSWORD" --auto-attach || \
+        (echo "Registration failed. Try using activation key or mount host certificates." && exit 1) && \
+        subscription-manager repos --disable='*-debug-rpms' && \
+        subscription-manager repos --enable codeready-builder-for-rhel-9-$(uname -m)-rpms; \
     else \
-        echo "Warning: No subscription credentials provided. Attempting to continue without registration..." && \
-        echo "Note: Repositories may not be available. You may need to provide subscription credentials."; \
+        echo "ERROR: Subscription credentials required (RHN_ORG_ID/RHN_ACTIVATION_KEY or RHN_USERNAME/RHN_PASSWORD)" && \
+        exit 1; \
     fi
-
-# Enable CodeReady Builder repository for Python 3.11 and build tools
-RUN subscription-manager repos --disable='*-debug-rpms' || true \
-    && subscription-manager repos --enable codeready-builder-for-rhel-9-$(uname -m)-rpms || true
 
 # 1. Install system packages: Python, build tools, git, SSH
 # Try to install numactl-devel for NUMA support, but continue if not available
