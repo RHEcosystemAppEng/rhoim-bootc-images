@@ -91,30 +91,26 @@ ARG PYTHON_VERSION=3.11
 # Register system with Red Hat subscription (REQUIRED for package installation)
 # 
 # RECOMMENDED for EC2: Register the host first, then mount certificates:
-#   podman build -v /etc/pki/entitlement:/etc/pki/entitlement:ro -v /etc/rhsm:/etc/rhsm:ro ...
+#   podman build --volume /etc/pki/entitlement:/etc/pki/entitlement:ro --volume /etc/rhsm:/etc/rhsm:ro ...
+#   OR using buildah: buildah bud --volume /etc/pki/entitlement:/etc/pki/entitlement:ro ...
 #
-# Alternative: Register directly in container (may fail due to container mode detection)
+# If subscription-manager fails (container mode), fall back to dnf config-manager
 RUN if [ -d /etc/pki/entitlement ] && [ -n "$(ls -A /etc/pki/entitlement/*.pem 2>/dev/null)" ]; then \
         echo "Using mounted host subscription certificates" && \
-        export SMDEV_CONTAINER_OFF=1 && \
-        subscription-manager refresh && \
-        subscription-manager repos --disable='*-debug-rpms' && \
-        subscription-manager repos --enable codeready-builder-for-rhel-9-$(uname -m)-rpms; \
-    elif [ -n "$RHN_ORG_ID" ] && [ -n "$RHN_ACTIVATION_KEY" ]; then \
-        echo "Registering with activation key..." && \
-        subscription-manager register --org="$RHN_ORG_ID" --activationkey="$RHN_ACTIVATION_KEY" --force || \
-        (echo "Registration failed. On EC2, register the host first and mount certificates." && exit 1) && \
-        subscription-manager repos --disable='*-debug-rpms' && \
-        subscription-manager repos --enable codeready-builder-for-rhel-9-$(uname -m)-rpms; \
-    elif [ -n "$RHN_USERNAME" ] && [ -n "$RHN_PASSWORD" ]; then \
-        echo "Registering with username/password..." && \
-        subscription-manager register --username="$RHN_USERNAME" --password="$RHN_PASSWORD" --auto-attach || \
-        (echo "Registration failed. Try using activation key or mount host certificates." && exit 1) && \
-        subscription-manager repos --disable='*-debug-rpms' && \
-        subscription-manager repos --enable codeready-builder-for-rhel-9-$(uname -m)-rpms; \
+        (export SMDEV_CONTAINER_OFF=1 && \
+         subscription-manager refresh 2>/dev/null && \
+         subscription-manager repos --disable='*-debug-rpms' 2>/dev/null && \
+         subscription-manager repos --enable codeready-builder-for-rhel-9-$(uname -m)-rpms 2>/dev/null) || \
+        (echo "subscription-manager failed (container mode), trying dnf config-manager..." && \
+         dnf config-manager --set-enabled codeready-builder-for-rhel-9-$(uname -m)-rpms 2>/dev/null || true); \
     else \
-        echo "ERROR: Subscription credentials required (RHN_ORG_ID/RHN_ACTIVATION_KEY or RHN_USERNAME/RHN_PASSWORD)" && \
-        exit 1; \
+        echo "No subscription certificates found. Checking available repositories..." && \
+        dnf repolist && \
+        echo "Attempting to enable CodeReady Builder via dnf config-manager..." && \
+        (dnf config-manager --set-enabled codeready-builder-for-rhel-9-$(uname -m)-rpms 2>/dev/null && \
+         echo "CodeReady Builder enabled") || \
+        (echo "CodeReady Builder not available. Base image repos may already be configured." && \
+         dnf repolist | grep -i codeready || echo "Will proceed with available repositories"); \
     fi
 
 # 1. Install system packages: Python, build tools, git, SSH
