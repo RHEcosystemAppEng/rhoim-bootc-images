@@ -1,5 +1,0 @@
-apiVersion: v2
-name: rhoim
-version: 0.1.0
-description: RHOIM inference platform (gateway + vLLM runtime); appliance mode supported
-type: application
