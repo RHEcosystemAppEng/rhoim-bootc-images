@@ -1,0 +1,33 @@
+[Unit]
+Description=RHOIM vLLM Model Serving Service
+After=network-online.target
+
+[Service]
+Type=simple
+# Load environment variables from config file (optional, for backward compatibility)
+EnvironmentFile=-/etc/sysconfig/rhoim
+# Default environment variables (can be overridden)
+Environment=VLLM_MODEL=TinyLlama/TinyLlama-1.1B-Chat-v1.0
+Environment=HOST=0.0.0.0
+Environment=PORT=8000
+Environment=DTYPE=float32
+Environment=VLLM_EXTRA_ARGS=
+# CPU mode environment variables (required for vLLM CPU detection)
+Environment=CUDA_VISIBLE_DEVICES=
+Environment=VLLM_TARGET_DEVICE=cpu
+Environment=VLLM_DEVICE=cpu
+Environment=VLLM_USE_CUDA=0
+Environment=VLLM_CPU_ONLY=1
+Environment=VLLM_PLATFORM=cpu
+Environment=VLLM_SKIP_PLATFORM_CHECK=1
+Environment=VLLM_USE_FLASHINFER=0
+# ExecStart calls the initializer script
+ExecStart=/usr/local/bin/initializer-entrypoint.sh
+# Redirect output to console for debugging
+StandardOutput=journal+console
+StandardError=journal+console
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,247 @@
+# =============================================================================
+# RHOIM Bootc Containerfile - vLLM Model Serving (RHEL Bootc Base + Build from Source)
+# =============================================================================
+#
+# This Containerfile creates a bootc-compatible image for serving LLM models
+# using vLLM built from source with CPU support.
+#
+# Base Image: registry.redhat.io/rhel9/rhel-bootc:latest
+#   - Red Hat RHEL 9 Bootc base image with bootc tools pre-installed
+#   - RHEL 9 based (RHAIIS ecosystem) - meets organizational requirement
+#   - Requires Red Hat registry authentication (podman login registry.redhat.io)
+#   - Requires Red Hat subscription for access
+#   - We build vLLM from source with CPU support and configure systemd service
+#   - Supports both CPU and GPU modes (CPU built-in, GPU via CUDA if available)
+#
+# =============================================================================
+# AUTHENTICATION SETUP
+# =============================================================================
+#
+# Before building, authenticate to Red Hat registry:
+#   podman login registry.redhat.io
+#   (Use your Red Hat employee credentials or service account)
+#
+# =============================================================================
+# BUILD INSTRUCTIONS
+# =============================================================================
+#
+# Build the container image:
+#   Note: You need BOTH registry authentication AND subscription registration:
+#   1. Registry auth (for pulling base image): podman login registry.redhat.io
+#   2. Subscription registration (for enabling repositories): use build args below
+#
+#   Option 1: Using username/password (Red Hat Customer Portal):
+#     podman build -t localhost/rhoim-bootc-rhel:latest \
+#       --build-arg RHN_USERNAME=your_username \
+#       --build-arg RHN_PASSWORD=your_password \
+#       -f ./Containerfile .
+#
+#   Option 2: Using activation key (recommended for service accounts/CI/CD):
+#     podman build -t localhost/rhoim-bootc-rhel:latest \
+#       --build-arg RHN_ORG_ID=your_org_id \
+#       --build-arg RHN_ACTIVATION_KEY=your_activation_key \
+#       -f ./Containerfile .
+#
+#   To find your org ID and create activation keys:
+#     - Visit: https://access.redhat.com/management/activation_keys
+#     - Or use: subscription-manager orgs
+#
+# Build bootc VM image (qcow2):
+#   podman run --rm --privileged \
+#     -v /var/lib/containers/storage:/var/lib/containers/storage \
+#     -v "$(pwd)/images":/output \
+#     quay.io/centos-bootc/bootc-image-builder:latest \
+#     --type qcow2 \
+#     localhost/rhoim-bootc-rhel:latest
+#
+# =============================================================================
+# RUNTIME CONFIGURATION
+# =============================================================================
+#
+# The image supports both CPU and GPU modes via the VLLM_DEVICE_TYPE
+# environment variable. No rebuild is required - the same image works for both.
+#
+# CPU Mode (Default - for testing):
+#   - VLLM_DEVICE_TYPE=cpu
+#   - Runs TinyLlama model for local testing
+#   - Works without GPU hardware
+#   - Uses float32 dtype and enforce-eager mode
+#
+# GPU Mode (Production):
+#   - VLLM_DEVICE_TYPE=cuda
+#   - Uses NVIDIA GPU when available
+#   - Auto-detects GPU via CUDA
+#   - Uses auto dtype for optimal performance
+#
+# =============================================================================
+
+# Use RHEL Bootc base image
+FROM registry.redhat.io/rhel9/rhel-bootc:latest
+
+# --- Build Arguments for Subscription Registration ---
+ARG RHN_USERNAME
+ARG RHN_PASSWORD
+ARG RHN_ORG_ID
+ARG RHN_ACTIVATION_KEY
+
+# --- Build Arguments for vLLM ---
+ARG VLLM_VERSION=0.11.0
+ARG PYTHON_VERSION=3.11
+
+# Register system with Red Hat subscription (REQUIRED for package installation)
+# 
+# RECOMMENDED for EC2: Register the host first, then mount certificates:
+#   podman build --volume /etc/pki/entitlement:/etc/pki/entitlement:ro --volume /etc/rhsm:/etc/rhsm:ro ...
+#   OR using buildah: buildah bud --volume /etc/pki/entitlement:/etc/pki/entitlement:ro ...
+#
+# If subscription-manager fails (container mode), fall back to dnf config-manager
+RUN if [ -d /etc/pki/entitlement ] && [ -n "$(ls -A /etc/pki/entitlement/*.pem 2>/dev/null)" ]; then \
+        echo "Using mounted host subscription certificates" && \
+        (export SMDEV_CONTAINER_OFF=1 && \
+         subscription-manager refresh 2>/dev/null && \
+         subscription-manager repos --disable='*-debug-rpms' 2>/dev/null && \
+         subscription-manager repos --enable codeready-builder-for-rhel-9-$(uname -m)-rpms 2>/dev/null) || \
+        (echo "subscription-manager failed (container mode), trying dnf config-manager..." && \
+         dnf config-manager --set-enabled codeready-builder-for-rhel-9-$(uname -m)-rpms 2>/dev/null || true); \
+    else \
+        echo "No subscription certificates found. Checking available repositories..." && \
+        dnf repolist && \
+        echo "Attempting to enable CodeReady Builder via dnf config-manager..." && \
+        (dnf config-manager --set-enabled codeready-builder-for-rhel-9-$(uname -m)-rpms 2>/dev/null && \
+         echo "CodeReady Builder enabled") || \
+        (echo "CodeReady Builder not available. Base image repos may already be configured." && \
+         dnf repolist | grep -i codeready || echo "Will proceed with available repositories"); \
+    fi
+
+# 1. Install system packages: Python, build tools, git, SSH
+# Try to install numactl-devel for NUMA support, but continue if not available
+RUN dnf -y install \
+        python${PYTHON_VERSION} \
+        python${PYTHON_VERSION}-pip \
+        python${PYTHON_VERSION}-devel \
+        gcc \
+        gcc-c++ \
+        make \
+        cmake \
+        ninja-build \
+        git \
+        tar \
+        gzip \
+        curl \
+        ca-certificates \
+        bash \
+        procps-ng \
+        iproute \
+        kmod \
+        openssh-server \
+        openssh-clients \
+    && (dnf -y install numactl-devel || echo "numactl-devel not available, will create stub") \
+    && update-ca-trust \
+    && dnf clean all
+
+# 2. Setup Python Virtual Environment
+RUN python${PYTHON_VERSION} -m venv /opt/vllm-venv
+ENV PATH="/opt/vllm-venv/bin:$PATH"
+
+# 3. Upgrade pip and install build dependencies
+RUN pip install --no-cache-dir --upgrade pip setuptools wheel
+
+# 4. Install PyTorch (CPU version for aarch64, or CUDA version for x86_64)
+# For CPU-only builds, use CPU wheels; for GPU support, use CUDA wheels
+RUN if [ "$(uname -m)" = "aarch64" ]; then \
+        pip install --no-cache-dir --index-url https://download.pytorch.org/whl/cpu \
+            torch torchvision torchaudio; \
+    else \
+        pip install --no-cache-dir --index-url https://download.pytorch.org/whl/cu121 \
+            torch torchvision torchaudio; \
+    fi
+
+# 5. Clone vLLM repository and build from source
+WORKDIR /tmp
+RUN git clone --depth 1 --branch v${VLLM_VERSION} https://github.com/vllm-project/vllm.git vllm-${VLLM_VERSION} || \
+    (echo "Branch v${VLLM_VERSION} not found, using main branch..." && \
+     git clone --depth 1 https://github.com/vllm-project/vllm.git vllm-${VLLM_VERSION})
+
+WORKDIR /tmp/vllm-${VLLM_VERSION}
+
+# 6. Install vLLM build requirements
+RUN pip install --no-cache-dir -r requirements/build.txt
+
+# 7. Install vLLM CPU requirements
+RUN pip install --no-cache-dir -r requirements/cpu.txt
+
+# 8. Build vLLM from source with CPU support
+# Remove -lnuma from CMakeLists.txt files to prevent linker errors
+# Create stub NUMA library if numactl-devel is not available
+# Set environment variables for CPU build
+# Reduce parallelism to avoid OOM errors during compilation
+RUN find . -type f \( -name "*.py" -o -name "CMakeLists.txt" -o -name "*.cmake" \) -exec sed -i 's/-lnuma//g' {} + 2>/dev/null || true \
+    && mkdir -p /tmp/numa_stub \
+    && printf '#include <stdlib.h>\nint numa_available(void) { return -1; }\nvoid* numa_alloc_onnode(size_t size, int node) { return malloc(size); }\nvoid numa_free(void *start, size_t size) { free(start); }\nint numa_node_of_cpu(int cpu) { return 0; }\nvoid numa_run_on_node(int node) {}\n' > /tmp/numa_stub/numa_stub.c \
+    && gcc -shared -fPIC -o /tmp/numa_stub/libnuma.so /tmp/numa_stub/numa_stub.c 2>/dev/null || true \
+    && CC=/usr/bin/gcc \
+       CXX=/usr/bin/g++ \
+       CXXFLAGS="-Wno-error -Wno-psabi -DVLLM_NUMA_DISABLED" \
+       LDFLAGS="-Wl,--as-needed -L/tmp/numa_stub" \
+       CMAKE_BUILD_PARALLEL_LEVEL=1 \
+       MAX_JOBS=1 \
+       SETUPTOOLS_SCM_PRETEND_VERSION=${VLLM_VERSION} \
+       VLLM_TARGET_DEVICE=cpu \
+       pip install --no-cache-dir . --no-build-isolation
+
+# 9. Install additional runtime dependencies
+RUN pip install --no-cache-dir \
+    transformers \
+    sentencepiece \
+    fastapi \
+    uvicorn[standard] \
+    huggingface_hub
+
+# 10. Clean up build artifacts
+WORKDIR /
+RUN rm -rf /tmp/vllm-${VLLM_VERSION}
+
+# --- Default Configuration (can be overridden at runtime) ---
+ENV VLLM_MODEL=TinyLlama/TinyLlama-1.1B-Chat-v1.0 \
+    HOST=0.0.0.0 \
+    PORT=8000 \
+    DTYPE=float32 \
+    VLLM_EXTRA_ARGS= \
+    PYTHONUNBUFFERED=1
+
+# --- Expose ports ---
+EXPOSE 8000
+
+# --- Add Systemd service for vLLM ---
+# Copy environment configuration file (can be edited at runtime)
+COPY vllm/rhoim.env /etc/sysconfig/rhoim
+
+# Copy systemd service unit
+COPY vllm/rhoim-vllm.service /etc/systemd/system/rhoim-vllm.service
+
+# Copy and set permissions for vLLM initializer script
+COPY --chmod=755 vllm/initializer-entrypoint.sh /usr/local/bin/initializer-entrypoint.sh
+
+# Enable service at boot (bootc-friendly: create wants symlink)
+RUN mkdir -p /etc/systemd/system/multi-user.target.wants \
+    && ln -sf /etc/systemd/system/rhoim-vllm.service /etc/systemd/system/multi-user.target.wants/rhoim-vllm.service
+
+# Configure and enable SSH for remote access
+# Generate SSH host keys and configure SSH daemon
+RUN mkdir -p /etc/ssh \
+    && ssh-keygen -A -f /etc/ssh || true \
+    && echo "PermitRootLogin yes" >> /etc/ssh/sshd_config \
+    && echo "PasswordAuthentication yes" >> /etc/ssh/sshd_config \
+    && echo "PubkeyAuthentication yes" >> /etc/ssh/sshd_config \
+    && echo "root:bootc123" | chpasswd || echo "Password change skipped (may need to be done at runtime)" \
+    && systemctl enable sshd.service || true \
+    && mkdir -p /etc/systemd/system/multi-user.target.wants \
+    && ln -sf /usr/lib/systemd/system/sshd.service /etc/systemd/system/multi-user.target.wants/sshd.service || true
+
+# Add bootc labels to make image recognized as bootc-compatible
+LABEL org.osbuild.bootc=true
+LABEL bootc=true
+
+# --- Final Command: Initialize Systemd (Mandatory for bootc) ---
+# Bootc images must run systemd as PID 1
+CMD ["/sbin/init"]
