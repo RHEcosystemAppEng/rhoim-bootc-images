@@ -51,14 +51,14 @@ Build the bootc container image with vLLM. You have three options for providing 
 If your host system is already registered with Red Hat subscription:
 
 ```bash
-cd /path/to/rhoim-bootc-images
+cd /path/to/rhoim-bootc-images/vllm-cpu
 
 podman build --volume /etc/pki/entitlement:/etc/pki/entitlement:ro \
   --volume /etc/rhsm:/etc/rhsm:ro \
   -t localhost/rhoim-bootc-rhel:latest \
   --build-arg VLLM_VERSION=0.11.0 \
   --build-arg PYTHON_VERSION=3.11 \
-  -f deploy/bootc-rhel/Containerfile .
+  -f ./Containerfile .
 ```
 
 **Option 2: Using Activation Key**
@@ -69,7 +69,7 @@ podman build -t localhost/rhoim-bootc-rhel:latest \
   --build-arg RHN_ACTIVATION_KEY=your_activation_key \
   --build-arg VLLM_VERSION=0.11.0 \
   --build-arg PYTHON_VERSION=3.11 \
-  -f deploy/bootc-rhel/Containerfile .
+  -f ./Containerfile .
 ```
 
 **Option 3: Using Username/Password**
@@ -80,7 +80,7 @@ podman build -t localhost/rhoim-bootc-rhel:latest \
   --build-arg RHN_PASSWORD=your_password \
   --build-arg VLLM_VERSION=0.11.0 \
   --build-arg PYTHON_VERSION=3.11 \
-  -f deploy/bootc-rhel/Containerfile .
+  -f ./Containerfile .
 ```
 
 **Build Arguments:**
@@ -621,12 +621,13 @@ If build fails with `g++: fatal error: Killed`, reduce parallelism:
 ## File Structure
 
 ```
-deploy/bootc-rhel/
-├── Containerfile              # Main build file
-├── initializer-entrypoint.sh  # vLLM startup script
-├── rhoim-vllm.service        # Systemd service unit
-├── rhoim.env                 # Environment configuration
-└── README.md                 # This file
+vllm-cpu/
+├── vllm
+|   ├── initializer-entrypoint.sh  # vLLM startup script
+|   ├── rhoim-vllm.service         # Systemd service unit
+|   └── rhoim.env                  # Environment configuration
+├── Containerfile                  # Main build file
+└── README.md                      # This file
 ```
 
 ## Production Deployment

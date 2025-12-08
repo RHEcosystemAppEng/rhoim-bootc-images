@@ -34,13 +34,13 @@
 #     podman build -t localhost/rhoim-bootc-rhel:latest \
 #       --build-arg RHN_USERNAME=your_username \
 #       --build-arg RHN_PASSWORD=your_password \
-#       -f deploy/bootc-rhel/Containerfile .
+#       -f ./Containerfile .
 #
 #   Option 2: Using activation key (recommended for service accounts/CI/CD):
 #     podman build -t localhost/rhoim-bootc-rhel:latest \
 #       --build-arg RHN_ORG_ID=your_org_id \
 #       --build-arg RHN_ACTIVATION_KEY=your_activation_key \
-#       -f deploy/bootc-rhel/Containerfile .
+#       -f ./Containerfile .
 #
 #   To find your org ID and create activation keys:
 #     - Visit: https://access.redhat.com/management/activation_keys
@@ -214,13 +214,13 @@ EXPOSE 8000
 
 # --- Add Systemd service for vLLM ---
 # Copy environment configuration file (can be edited at runtime)
-COPY deploy/bootc-rhel/rhoim.env /etc/sysconfig/rhoim
+COPY vllm/rhoim.env /etc/sysconfig/rhoim
 
 # Copy systemd service unit
-COPY deploy/bootc-rhel/rhoim-vllm.service /etc/systemd/system/rhoim-vllm.service
+COPY vllm/rhoim-vllm.service /etc/systemd/system/rhoim-vllm.service
 
 # Copy and set permissions for vLLM initializer script
-COPY --chmod=755 deploy/bootc-rhel/initializer-entrypoint.sh /usr/local/bin/initializer-entrypoint.sh
+COPY --chmod=755 vllm/initializer-entrypoint.sh /usr/local/bin/initializer-entrypoint.sh
 
 # Enable service at boot (bootc-friendly: create wants symlink)
 RUN mkdir -p /etc/systemd/system/multi-user.target.wants \
