@@ -51,7 +51,7 @@ Build the bootc container image with vLLM. You have three options for providing 
 If your host system is already registered with Red Hat subscription:
 
 ```bash
-cd /path/to/rhoim-bootc-images/vllm-cpu
+cd /path/to/rhoim-bootc-images/vllm-bootc
 
 podman build --volume /etc/pki/entitlement:/etc/pki/entitlement:ro \
   --volume /etc/rhsm:/etc/rhsm:ro \
@@ -621,13 +621,19 @@ If build fails with `g++: fatal error: Killed`, reduce parallelism:
 ## File Structure
 
 ```
-vllm-cpu/
-├── vllm
-|   ├── initializer-entrypoint.sh  # vLLM startup script
-|   ├── rhoim-vllm.service         # Systemd service unit
-|   └── rhoim.env                  # Environment configuration
-├── Containerfile                  # Main build file
-└── README.md                      # This file
+vllm-bootc/
+├── Containerfile
+├── etc/
+│   ├── sysconfig/
+│   │   └── rhoim                  # Environment defaults
+│   ├── systemd/
+│   │   └── system/
+│   │       └── rhoim-vllm.service # Systemd service unit
+│   └── sysusers.d/
+│       └── rhoim.conf             # User creation for rhoim service
+├── vllm/
+│   └── initializer-entrypoint.sh  # vLLM startup script
+└── README.md
 ```
 
 ## Production Deployment

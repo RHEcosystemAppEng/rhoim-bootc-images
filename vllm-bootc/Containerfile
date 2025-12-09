@@ -1,0 +1,82 @@
+# =============================================================================
+# Stage 1: Builder – UBI, build venv with vLLM + deps
+# =============================================================================
+FROM registry.access.redhat.com/ubi9/ubi:latest AS builder
+
+ARG PYTHON_VERSION=3.11
+
+# Build-time deps only (stay in builder image)
+RUN dnf -y install \
+      python${PYTHON_VERSION} \
+      python${PYTHON_VERSION}-pip \
+      git jq which procps-ng \
+  && dnf clean all
+  
+# Create vLLM venv
+RUN python${PYTHON_VERSION} -m venv /opt/vllm-venv
+
+ENV PATH="/opt/vllm-venv/bin:${PATH}" \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    PYTHONUNBUFFERED=1
+
+# Upgrade pip tooling
+RUN pip install --no-cache-dir --upgrade pip setuptools wheel
+
+# CPU/GPU-aware PyTorch install:
+# - aarch64 → CPU wheels
+# - x86_64  → CUDA 12.1 wheels
+RUN if [ "$(uname -m)" = "aarch64" ]; then \
+      pip install --no-cache-dir \
+        torch torchvision torchaudio \
+        --index-url https://download.pytorch.org/whl/cpu ; \
+    else \
+      pip install --no-cache-dir \
+        torch torchvision torchaudio \
+        --index-url https://download.pytorch.org/whl/cu121 ; \
+    fi
+
+# vLLM + runtime deps (from plain PyPI)
+RUN pip install --no-cache-dir \
+      "vllm==0.6.*" \
+      fastapi \
+      "uvicorn[standard]" \
+      transformers \
+      sentencepiece \
+      huggingface_hub
+
+
+# =============================================================================
+# Stage 2: Runtime – RHEL 9 bootc base
+# =============================================================================
+FROM registry.redhat.io/rhel9/rhel-bootc:latest
+
+# Copy pre-built venv into final image
+COPY --from=builder /opt/vllm-venv /opt/vllm-venv
+
+# Copy /etc contents in one go (sysconfig, systemd units, sysusers)
+COPY etc/ /etc/
+
+# Initializer script
+COPY vllm/initializer-entrypoint.sh /usr/local/bin/initializer-entrypoint.sh
+
+RUN chmod +x /usr/local/bin/initializer-entrypoint.sh \
+    # Create rhoim user via systemd-sysusers
+    && systemd-sysusers \
+    # Create RHOIM layout and assign ownership to rhoim
+    && mkdir -p /opt/rhoim/{bin,models,gateway} /tmp/models \
+    && chown -R rhoim:rhoim /opt/rhoim /tmp/models \
+    # Enable the vLLM service
+    && systemctl enable rhoim-vllm.service
+
+# vLLM listens here (still helpful when running as a plain container)
+EXPOSE 8000
+
+# Mark as bootc-compatible
+LABEL org.osbuild.bootc=true \
+      bootc=true
+
+# Final bootc lint step
+RUN bootc container lint
+
+# Bootc images must run systemd as PID 1
+CMD ["/sbin/init"]
