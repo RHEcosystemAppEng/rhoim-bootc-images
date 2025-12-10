@@ -39,11 +39,18 @@ LOCAL_MODEL_DIR="${MODEL_PATH}/${VLLM_MODEL}"
 
 if [ ! -d "${LOCAL_MODEL_DIR}" ] || [ -z "$(ls -A "${LOCAL_MODEL_DIR}" 2>/dev/null || true)" ]; then
     echo "[RHOIM] Downloading ${VLLM_MODEL} to ${LOCAL_MODEL_DIR}"
+
+    # Prefer venv CLI, but fall back to PATH if needed
     HF_CLI="/opt/vllm-venv/bin/huggingface-cli"
-    if ! command -v "${HF_CLI}" >/dev/null 2>&1; then
-        echo "[RHOIM] ERROR: huggingface-cli not found in /opt/vllm-venv" >&2
-        exit 1
+    if [ ! -x "${HF_CLI}" ]; then
+        if command -v huggingface-cli >/dev/null 2>&1; then
+            HF_CLI="$(command -v huggingface-cli)"
+        else
+            echo "[RHOIM] ERROR: huggingface-cli not found (tried /opt/vllm-venv and PATH)" >&2
+            exit 1
+        fi
     fi
+
     "${HF_CLI}" download "${VLLM_MODEL}" \
         --local-dir "${LOCAL_MODEL_DIR}" \
         --local-dir-use-symlinks False
@@ -76,7 +83,12 @@ if [[ -n "${VLLM_EXTRA_ARGS}" ]]; then
     ARGS+=("${EXTRA_ARR[@]}")
 fi
 
-PYTHON_CMD="/opt/vllm-venv/bin/python"
+# Prefer python3.11 if our symlink exists, otherwise python
+if [ -x "/opt/vllm-venv/bin/python3.11" ]; then
+    PYTHON_CMD="/opt/vllm-venv/bin/python3.11"
+else
+    PYTHON_CMD="/opt/vllm-venv/bin/python"
+fi
 
 echo "[RHOIM] Using Python: ${PYTHON_CMD}"
 echo "[RHOIM] Final vLLM args: ${ARGS[*]}"

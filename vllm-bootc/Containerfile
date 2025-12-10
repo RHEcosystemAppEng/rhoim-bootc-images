@@ -54,6 +54,15 @@ FROM registry.redhat.io/rhel9/rhel-bootc:latest
 # Copy pre-built venv into final image
 COPY --from=builder /opt/vllm-venv /opt/vllm-venv
 
+# 🔧 Ensure python3.11 exists in the venv for huggingface-cli shebang
+RUN if [ ! -x /opt/vllm-venv/bin/python3.11 ] && [ -x /opt/vllm-venv/bin/python ]; then \
+      ln -s python /opt/vllm-venv/bin/python3.11; \
+    fi
+
+# Optionally make venv first on PATH (nice but not strictly required)
+ENV PATH="/opt/vllm-venv/bin:${PATH}" \
+    PYTHONUNBUFFERED=1
+
 # Copy /etc contents in one go (sysconfig, systemd units, sysusers)
 COPY etc/ /etc/
 
