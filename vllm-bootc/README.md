@@ -5,37 +5,30 @@ This directory contains the Containerfile and configuration files for building a
 ## Overview
 
 - **Base Image**: `registry.redhat.io/rhel9/rhel-bootc:latest`
-- **vLLM**: Built from source with CPU support (v0.11.0)
-- **Python**: 3.11
-- **Architecture**: aarch64 (ARM64)
+- **Builder Base**: `registry.access.redhat.com/ubi9/ubi:latest`
+- **vLLM**: Installed from PyPI (default `0.6.*`, overridable via `VLLM_VERSION`)
+- **Python**: 3.11 (overridable via `PYTHON_VERSION`)
+- **Target Architecture**: `linux/amd64` (x86_64)
+  - Building for `linux/arm64` currently fails because upstream vLLM does not support this environment and raises `RuntimeError: Unknown runtime environment`.
 - **Features**:
   - vLLM OpenAI-compatible API server
-  - Systemd service management
-  - SSH access enabled
-  - CPU mode support (for testing without GPU)
+  - Systemd service management (`rhoim-vllm.service`)
+  - CPU mode support (for environments without GPU)
 
 ## Prerequisites
 
-1. **Red Hat Subscription Access**
-   - Red Hat Customer Portal account
-   - Activation key and Organization ID (or username/password)
-   - Authenticated to `registry.redhat.io`:
-     ```bash
-     podman login registry.redhat.io
-     ```
-
-2. **Build Tools**
+1. **Build Tools**
    - Podman (rootful mode recommended for bootc-image-builder)
    - `bootc-image-builder` container image
-   - QEMU (for testing locally on macOS)
+   - QEMU (for testing VM images locally)
 
-3. **macOS Setup** (if building on macOS)
+2. **macOS Setup** (if building on macOS)
    ```bash
    # Ensure Podman machine is rootful
    podman machine stop
    podman machine set --rootful=true
    podman machine start
-   
+
    # Install QEMU (for testing)
    brew install qemu
    ```
@@ -44,65 +37,30 @@ This directory contains the Containerfile and configuration files for building a
 
 ### 1. Build Container Image
 
-Build the bootc container image with vLLM. You have three options for providing Red Hat subscription access:
-
-**Option 1: Mount Host Subscription Certificates (Recommended for EC2)**
-
-If your host system is already registered with Red Hat subscription:
+Build the bootc container image with vLLM. Important: we must build for linux/amd64 so that vLLM can be installed successfully.
 
 ```bash
 cd /path/to/rhoim-bootc-images/vllm-bootc
 
-podman build --volume /etc/pki/entitlement:/etc/pki/entitlement:ro \
-  --volume /etc/rhsm:/etc/rhsm:ro \
+podman build \
+  --platform linux/amd64 \
   -t localhost/rhoim-bootc-rhel:latest \
-  --build-arg VLLM_VERSION=0.11.0 \
+  --build-arg VLLM_VERSION=0.6.* \
   --build-arg PYTHON_VERSION=3.11 \
   -f ./Containerfile .
-```
 
-**Option 2: Using Activation Key**
-
-```bash
-podman build -t localhost/rhoim-bootc-rhel:latest \
-  --build-arg RHN_ORG_ID=your_org_id \
-  --build-arg RHN_ACTIVATION_KEY=your_activation_key \
-  --build-arg VLLM_VERSION=0.11.0 \
-  --build-arg PYTHON_VERSION=3.11 \
-  -f ./Containerfile .
-```
-
-**Option 3: Using Username/Password**
-
-```bash
-podman build -t localhost/rhoim-bootc-rhel:latest \
-  --build-arg RHN_USERNAME=your_username \
-  --build-arg RHN_PASSWORD=your_password \
-  --build-arg VLLM_VERSION=0.11.0 \
-  --build-arg PYTHON_VERSION=3.11 \
-  -f ./Containerfile .
 ```
 
 **Build Arguments:**
-- `RHN_ORG_ID`: Your Red Hat Organization ID (for Option 2)
-- `RHN_ACTIVATION_KEY`: Your Red Hat Activation Key (for Option 2)
-- `RHN_USERNAME`: Your Red Hat username (for Option 3)
-- `RHN_PASSWORD`: Your Red Hat password (for Option 3)
-- `VLLM_VERSION`: vLLM version to build (default: 0.11.0)
+- `VLLM_VERSION`: vLLM version to install from PyPI (default: 0.6.*)
 - `PYTHON_VERSION`: Python version (default: 3.11)
 
-**Note:** If certificates are mounted (Option 1) or subscription credentials are provided, the build will use them. Otherwise, it will attempt to use available repositories from the base image.
-
-**Note**: The build process:
-- Registers the system with Red Hat subscription
-- Installs Python 3.11, build tools, and SSH
-- Builds vLLM from source with CPU support
-- Configures systemd services for vLLM and SSH
-- Takes approximately 30-60 minutes (vLLM compilation is time-consuming)
+**Note**:
+If you omit --platform linux/amd64 on an Apple Silicon (ARM) host, Podman will build for linux/arm64 and the pip install vllm==… step will fail with: ``` RuntimeError: Unknown runtime environment```
 
 ### 2. Build Bootc VM Image (qcow2)
 
-Convert the container image to a bootable VM disk image:
+You can convert the container image to a bootable VM disk image using bootc-image-builder:
 
 ```bash
 mkdir -p images
@@ -592,14 +550,6 @@ qemu-system-x86_64 -cpu qemu64,+x86-64-v2 ...
 # Or more explicitly:
 qemu-system-x86_64 -cpu qemu64,+ssse3,+sse4.1,+sse4.2,+popcnt ...
 ```
-
-### Build Fails with Subscription Errors
-
-**Solutions**:
-1. Verify activation key and org ID are correct
-2. Check Red Hat subscription is active
-3. Try using username/password instead
-4. Ensure `podman login registry.redhat.io` succeeded
 
 ### Build Fails with NUMA Linking Error
 

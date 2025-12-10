@@ -4,6 +4,7 @@
 FROM registry.access.redhat.com/ubi9/ubi:latest AS builder
 
 ARG PYTHON_VERSION=3.11
+ARG VLLM_VERSION=0.6.*
 
 # Build-time deps only (stay in builder image)
 RUN dnf -y install \
@@ -37,7 +38,7 @@ RUN if [ "$(uname -m)" = "aarch64" ]; then \
 
 # vLLM + runtime deps (from plain PyPI)
 RUN pip install --no-cache-dir \
-      "vllm==0.6.*" \
+      "vllm==${VLLM_VERSION}" \
       fastapi \
       "uvicorn[standard]" \
       transformers \
