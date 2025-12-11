@@ -1,0 +1,62 @@
+name: Build amd64 Bootable Image
+
+on:
+  workflow_dispatch:
+    inputs:
+      image_ref:
+        description: 'Container image reference (e.g., quay.io/olavtar/rhoim-bootc-rhel:latest)'
+        required: true
+        default: 'quay.io/olavtar/rhoim-bootc-rhel:latest'
+      image_tag:
+        description: 'Local tag for the image'
+        required: true
+        default: 'localhost/rhoim-bootc-rhel-olga:v2'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest  # This is amd64
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      
+      - name: Install Podman
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y podman
+          podman --version
+      
+      - name: Configure Podman for rootless
+        run: |
+          echo "$USER:100000:65536" | sudo tee -a /etc/subuid
+          echo "$USER:100000:65536" | sudo tee -a /etc/subgid
+      
+      - name: Pull container image
+        run: |
+          podman pull ${{ inputs.image_ref }}
+          podman tag ${{ inputs.image_ref }} ${{ inputs.image_tag }}
+      
+      - name: Build bootable images
+        run: |
+          mkdir -p images
+          podman run --rm --privileged \
+            -v /var/lib/containers/storage:/var/lib/containers/storage \
+            -v "$(pwd)/images":/output \
+            quay.io/centos-bootc/bootc-image-builder:latest \
+            --type qcow2 \
+            --type raw \
+            --type vhd \
+            --type ami \
+            ${{ inputs.image_tag }}
+      
+      - name: Upload bootable images
+        uses: actions/upload-artifact@v4
+        with:
+          name: bootable-images
+          path: images/
+          retention-days: 7
+      
+      - name: List generated images
+        run: |
+          find images -type f -name "*.qcow2" -o -name "*.raw" -o -name "*.vhd" -o -name "*.ami" | head -20
+
