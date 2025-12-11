@@ -16,8 +16,8 @@ VLLM_HOST="0.0.0.0"
 #
 # Assumes NVIDIA GPUs only - other GPU types are not supported
 # This controls all device-related settings automatically
-# Default: "cpu" (safe for environments without GPU)
-VLLM_DEVICE_TYPE="cpu"
+# Default: try GPU if available, otherwise use CPU
+VLLM_DEVICE_TYPE="auto"
 
 # Optional: Override specific vLLM settings if needed
 # VLLM_LOGGING_LEVEL=DEBUG
