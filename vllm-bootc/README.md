@@ -249,16 +249,9 @@ journalctl -u rhoim-vllm.service -f
 **Symptom**: Service starts but crashes with `RuntimeError: Engine core initialization failed. See root cause above. Failed core proc(s): {'EngineCore_DP0': -4}` or `code=dumped, status=4/ILL`
 
 **Cause**: CPU instruction incompatibility. This occurs when:
-- **On Azure**: VM CPU doesn't support AVX-512 instructions required by vLLM's Intel IPEX optimizations
 - **On QEMU**: Building on macOS M3 (Apple Silicon) and running in QEMU with `cortex-a72` - OpenBLAS libraries are compiled with CPU-specific optimizations not available in the emulated CPU
+- **On Cloud Platforms**: VM CPU doesn't support required instructions (see [Cloud Deployment Guide](../docs/CLOUD_DEPLOYMENT.md) for cloud-specific solutions)
 - **This is NOT related to the bootc-image-builder tool** - the tool is just a converter and doesn't affect the runtime OS
-
-**Solutions for Azure**:
-1. **Resize VM to Intel Ice Lake or newer** (recommended):
-   - Use `Standard_D4s_v5` (4 vCPU, 16 GiB RAM) - Intel Ice Lake with AVX-512
-   - Use `Standard_D2s_v5` (2 vCPU, 8 GiB RAM) - Intel Ice Lake with AVX-512
-   - **Avoid**: AMD-based VMs (Das_v4, Eas_v4) or older Intel VMs without AVX-512
-   - Verify: `grep flags /proc/cpuinfo | grep avx512f` should show `avx512f`
 
 **Solutions for QEMU/Local Testing**:
 1. **Build on real ARM64 hardware** (recommended for production):
@@ -357,7 +350,8 @@ For production deployment:
 3. **Secure access**: Configure appropriate authentication and access controls
 4. **Configure networking**: Set up proper networking and firewall rules for your environment
 5. **Monitor logs**: Set up log aggregation and monitoring
-6. **VM sizing**: Use appropriate VM sizes with AVX-512 support (e.g., `Standard_D4s_v5` or larger)
+
+For cloud deployment specifics (VM sizing, AVX-512 requirements, etc.), see the [Cloud Deployment Guide](../docs/CLOUD_DEPLOYMENT.md).
 
 ## Additional Resources
 
