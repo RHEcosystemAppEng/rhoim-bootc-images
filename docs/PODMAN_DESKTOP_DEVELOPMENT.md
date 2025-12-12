@@ -19,16 +19,21 @@ This guide covers setting up and using Podman Desktop for local development and 
 
 ### macOS
 
+**Option 1: Download and Install**
 1. Download Podman Desktop from [podman-desktop.io](https://podman-desktop.io)
 2. Install the application
 3. Start Podman Desktop from Applications
 
+**Option 2: Install via Homebrew**
+```bash
+brew install --cask podman-desktop
+```
+
 ### Linux
 
-```bash
-# Install Podman Desktop via Flatpak
-flatpak install flathub io.podman_desktop.PodmanDesktop
-```
+1. Install Podman Desktop via Flatpak from [Flathub](https://flathub.org/apps/io.podman_desktop.PodmanDesktop)
+2. Or download from [podman-desktop.io](https://podman-desktop.io)
+3. Start Podman Desktop
 
 ### Windows
 
@@ -49,22 +54,6 @@ flatpak install flathub io.podman_desktop.PodmanDesktop
 5. Click **Install** on the bootc extension
 6. Wait for installation to complete
 7. Restart Podman Desktop if prompted
-
-**Alternative**: If the extension is not available in the UI, you can install it via command line:
-```bash
-# Check if bootc CLI is available
-bootc --version
-
-# If not installed, install bootc (the extension uses this)
-# On macOS
-brew install bootc
-
-# On Linux (RHEL/Fedora)
-sudo dnf install bootc
-
-# On Linux (Ubuntu/Debian)
-# Follow instructions at https://www.bootc.dev/install
-```
 
 **Note**: The bootc extension enables bootc-specific features in Podman Desktop, such as:
 - Building bootable disk images from container images
@@ -114,7 +103,7 @@ If you need more resources for building large images:
 6. Monitor the build progress in the build log window
 7. Once complete, the image will appear in the **Images** list
 
-**Note**: For bootc images, you typically need to build for `linux/amd64` platform. The platform dropdown in Podman Desktop allows you to select the target architecture regardless of your host machine's architecture. For example, if you're building on Apple Silicon (ARM64 host), you can still select `linux/amd64` as the target platform for cross-platform builds. However, cross-architecture builds may be slower and some tools (like `bootc-image-builder`) may not work correctly with emulation.
+**Note**: For bootc images, you typically need to build for `linux/amd64` platform. The platform dropdown in Podman Desktop allows you to select the target architecture regardless of your host machine's architecture. However, cross-architecture builds may be slower and some tools may not work correctly with emulation.
 
 ### View Images in Podman Desktop
 
@@ -125,8 +114,6 @@ If you need more resources for building large images:
    - Size
    - Created date
    - Actions (run, delete, etc.)
-
-**Note**: Cross-architecture builds may be slower and some tools (like `bootc-image-builder`) may not work correctly with emulation.
 
 ## Running Containers
 
@@ -163,18 +150,13 @@ If you need more resources for building large images:
 
 Since bootc containers use systemd, logs are in journald, not stdout. To view systemd logs:
 
-1. Open the container's **Terminal** tab in Podman Desktop
-2. Run these commands in the terminal:
-   ```bash
-   # View recent system logs
-   journalctl --no-pager | tail -50
-
-   # Check vLLM service status
-   systemctl status rhoim-vllm.service
-
-   # View vLLM service logs
-   journalctl -u rhoim-vllm.service --no-pager
-   ```
+1. Navigate to **Containers** tab
+2. Click on your container name
+3. Click **Terminal** tab to open a shell inside the container
+4. In the terminal, you can run:
+   - `journalctl --no-pager | tail -50` - View recent system logs
+   - `systemctl status rhoim-vllm.service` - Check vLLM service status
+   - `journalctl -u rhoim-vllm.service --no-pager` - View vLLM service logs
 
 ### Access Container Shell
 
@@ -185,15 +167,14 @@ Since bootc containers use systemd, logs are in journald, not stdout. To view sy
 
 ### Test vLLM API
 
-Once the container is running, test the vLLM API from your host machine:
+Once the container is running, you can test the vLLM API:
 
-```bash
-# Health check
-curl http://localhost:8000/health
+1. Open a web browser or API testing tool (like Postman or curl)
+2. Test the API endpoints:
+   - Health check: `http://localhost:8000/health`
+   - List models: `http://localhost:8000/v1/models`
 
-# List models
-curl http://localhost:8000/v1/models
-```
+**Note**: These endpoints are accessible from your host machine on port 8000 (mapped from container port 8000).
 
 ### Stop and Remove Container
 
@@ -248,8 +229,8 @@ Once you have created your bootable disk images, you can deploy them to cloud pl
 **Cause**: Attempting to build amd64 bootable disk on arm64 host.
 
 **Solution**: 
-- Build for native architecture (arm64), or
-- Use a native amd64 environment (VM, cloud instance, CI/CD)
+- Build for native architecture (arm64) in Podman Desktop, or
+- Use a native amd64 environment for building (VM, cloud instance, or CI/CD pipeline)
 
 ### Container exits immediately
 
@@ -264,38 +245,38 @@ Once you have created your bootable disk images, you can deploy them to cloud pl
 
 **Cause**: Bootc containers use systemd, which logs to journald, not stdout.
 
-**Solution**: Use the container's Terminal tab and run:
-```bash
-journalctl --no-pager
-journalctl -u rhoim-vllm.service --no-pager
-```
+**Solution**: 
+1. Navigate to **Containers** tab
+2. Click on your container name
+3. Click **Terminal** tab (this opens a shell inside the container)
+4. In the container's terminal, run:
+   - `journalctl --no-pager` - View all system logs
+   - `journalctl -u rhoim-vllm.service --no-pager` - View vLLM service logs
+
+**Note**: `journalctl` is a systemd utility that comes with the Linux system inside the container (RHEL 9), not from Podman Desktop. Podman Desktop provides the Terminal tab to access the container's shell where you can run these commands.
 
 ### Service not starting
 
-1. Open the container's **Terminal** tab in Podman Desktop
-2. Check service status:
-   ```bash
-   systemctl status rhoim-vllm.service
-   systemctl list-units --failed
-   ```
-3. View detailed logs:
-   ```bash
-   journalctl -u rhoim-vllm.service --no-pager -n 100
-   ```
+1. Navigate to **Containers** tab
+2. Click on your container name
+3. Click **Terminal** tab
+4. In the terminal, check service status:
+   - `systemctl status rhoim-vllm.service` - Check vLLM service status
+   - `systemctl list-units --failed` - List all failed services
+5. View detailed logs:
+   - `journalctl -u rhoim-vllm.service --no-pager -n 100` - View last 100 log lines
 
 ### Port not accessible
 
-1. Open the container's **Terminal** tab
-2. Check if service is listening:
-   ```bash
-   netstat -tlnp | grep 8000
-   # or
-   ss -tlnp | grep 8000
-   ```
-3. Verify port mapping in Podman Desktop:
-   - Go to **Containers** tab
+1. Verify port mapping in Podman Desktop:
+   - Navigate to **Containers** tab
    - Click on your container
    - Check the **Ports** section to verify port 8000 is mapped correctly
+2. Check if service is listening inside the container:
+   - Click **Terminal** tab
+   - Run: `netstat -tlnp | grep 8000` or `ss -tlnp | grep 8000`
+3. Verify the service is running:
+   - In the terminal, run: `systemctl status rhoim-vllm.service`
 
 ### Clean Up Resources
 
