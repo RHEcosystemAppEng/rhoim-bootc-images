@@ -1,6 +1,18 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# 0. Set CPU-only env vars early for arm64 to prevent CUDA detection during vLLM import
+# This must happen BEFORE any vLLM imports (which happen during argument parsing)
+ARCH=$(uname -m)
+if [ "$ARCH" = "aarch64" ]; then
+    export CUDA_VISIBLE_DEVICES=
+    export VLLM_NO_CUDA=1
+    export VLLM_CPU_ONLY=1
+    export VLLM_PLATFORM=cpu
+    export VLLM_SKIP_PLATFORM_CHECK=1
+    export VLLM_USE_FLASHINFER=0
+fi
+
 # 1. Load /etc/sysconfig/rhoim if present
 if [ -f "/etc/sysconfig/rhoim" ]; then
     # shellcheck disable=SC1091
@@ -65,10 +77,11 @@ ARGS=(
 
 if [[ "${DEVICE}" == "cuda" ]]; then
     echo "[RHOIM] Starting vLLM in CUDA mode"
-    ARGS+=(--device cuda)
+    # vLLM 0.10.2 doesn't support --device argument, rely on environment variables
 else
     echo "[RHOIM] Starting vLLM in CPU mode"
-    ARGS+=(--device cpu --dtype "${DTYPE}" --enforce-eager)
+    # vLLM 0.10.2 doesn't support --device argument, use environment variables and dtype
+    ARGS+=(--dtype "${DTYPE}" --enforce-eager)
     export CUDA_VISIBLE_DEVICES=
     export VLLM_NO_CUDA=1
     export VLLM_CPU_ONLY=1
@@ -83,12 +96,8 @@ if [[ -n "${VLLM_EXTRA_ARGS}" ]]; then
     ARGS+=("${EXTRA_ARR[@]}")
 fi
 
-# Prefer python3.11 if our symlink exists, otherwise python
-if [ -x "/opt/vllm-venv/bin/python3.11" ]; then
-    PYTHON_CMD="/opt/vllm-venv/bin/python3.11"
-else
-    PYTHON_CMD="/opt/vllm-venv/bin/python"
-fi
+# Use the venv's python executable
+PYTHON_CMD="/opt/vllm-venv/bin/python"
 
 echo "[RHOIM] Using Python: ${PYTHON_CMD}"
 echo "[RHOIM] Final vLLM args: ${ARGS[*]}"
