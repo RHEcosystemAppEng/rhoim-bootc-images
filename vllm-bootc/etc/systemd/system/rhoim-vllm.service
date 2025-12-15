@@ -20,7 +20,8 @@ Environment=PORT=8000
 Environment=DTYPE=float32
 Environment=VLLM_EXTRA_ARGS=
 
-# Do NOT set CPU-only envs here; let the script choose based on VLLM_DEVICE_TYPE
+# Do NOT set CPU-only envs here; let the initializer script choose based on architecture
+# The initializer script sets CPU env vars early for arm64 to prevent CUDA detection
 ExecStart=/usr/local/bin/initializer-entrypoint.sh
 
 StandardOutput=journal+console
