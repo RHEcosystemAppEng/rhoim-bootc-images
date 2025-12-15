@@ -6,14 +6,14 @@ This directory contains the Containerfile and configuration files for building a
 
 - **Base Image**: `registry.redhat.io/rhel9/rhel-bootc:latest`
 - **Builder Base**: `registry.access.redhat.com/ubi9/ubi:latest`
-- **vLLM**: Installed from PyPI (default `0.6.*`, overridable via `VLLM_VERSION`)
-- **Python**: 3.11 (overridable via `PYTHON_VERSION`)
-- **Target Architecture**: `linux/amd64` (x86_64)
-  - Building for `linux/arm64` currently fails because upstream vLLM does not support this environment and raises `RuntimeError: Unknown runtime environment`.
+- **vLLM**: Built from source (default `0.10.2`, overridable via `VLLM_VERSION`)
+- **Python**: 3.9 (overridable via `PYTHON_VERSION`, from system repos)
+- **Target Architectures**: `linux/amd64` (x86_64) and `linux/arm64` (aarch64)
 - **Features**:
   - vLLM OpenAI-compatible API server
   - Systemd service management (`rhoim-vllm.service`)
   - CPU mode support (for environments without GPU)
+  - Source build for both architectures (no subscription required)
 
 ## Prerequisites
 
@@ -37,26 +37,43 @@ This directory contains the Containerfile and configuration files for building a
 
 ### 1. Build Container Image
 
-Build the bootc container image with vLLM. Important: we must build for linux/amd64 so that vLLM can be installed successfully.
+Build the bootc container image with vLLM. vLLM is built from source for both architectures.
 
+**For AMD64 (x86_64):**
 ```bash
 cd /path/to/rhoim-bootc-images/vllm-bootc
 
 podman build \
   --platform linux/amd64 \
-  -t localhost/rhoim-bootc-rhel:latest \
-  --build-arg VLLM_VERSION=0.6.* \
-  --build-arg PYTHON_VERSION=3.11 \
+  -t localhost/rhoim-bootc-rhel-amd64:latest \
+  --build-arg VLLM_VERSION=0.10.2 \
+  --build-arg PYTHON_VERSION=3.9 \
   -f ./Containerfile .
+```
 
+**For ARM64 (aarch64):**
+```bash
+cd /path/to/rhoim-bootc-images/vllm-bootc
+
+podman build \
+  --platform linux/arm64 \
+  -t localhost/rhoim-bootc-rhel-arm64:latest \
+  --build-arg VLLM_VERSION=0.10.2 \
+  --build-arg PYTHON_VERSION=3.9 \
+  -f ./Containerfile .
 ```
 
 **Build Arguments:**
-- `VLLM_VERSION`: vLLM version to install from PyPI (default: 0.6.*)
-- `PYTHON_VERSION`: Python version (default: 3.11)
+- `VLLM_VERSION`: vLLM version to build from source (default: 0.10.2)
+- `PYTHON_VERSION`: Python version (default: 3.9, from system repos)
 
-**Note**:
-If you omit --platform linux/amd64 on an Apple Silicon (ARM) host, Podman will build for linux/arm64 and the pip install vllm==… step will fail with: ``` RuntimeError: Unknown runtime environment```
+**Note**: vLLM is built from source using the `scripts/build-vllm-from-source.sh` script. This approach:
+- Ensures compatibility across architectures (amd64 and arm64)
+- Avoids subscription requirements (uses UBI9 builder)
+- Handles NUMA library dependencies automatically
+- Works reliably for CPU-only mode (pre-built wheels have compatibility issues)
+
+The build script handles the complete process including cloning the vLLM repository, installing dependencies, creating NUMA stubs, and building vLLM with CPU-only support.
 
 ### 2. Build Bootc VM Image (qcow2)
 
@@ -65,12 +82,21 @@ You can convert the container image to a bootable VM disk image using bootc-imag
 ```bash
 mkdir -p images
 
+# For AMD64
 podman run --rm --privileged \
   -v /var/lib/containers/storage:/var/lib/containers/storage \
   -v "$(pwd)/images":/output \
   quay.io/centos-bootc/bootc-image-builder:latest \
   --type qcow2 \
-  localhost/rhoim-bootc-rhel:latest
+  localhost/rhoim-bootc-rhel-amd64:latest
+
+# For ARM64
+podman run --rm --privileged \
+  -v /var/lib/containers/storage:/var/lib/containers/storage \
+  -v "$(pwd)/images":/output \
+  quay.io/centos-bootc/bootc-image-builder:latest \
+  --type qcow2 \
+  localhost/rhoim-bootc-rhel-arm64:latest
 ```
 
 **Note**: The `bootc-image-builder` tool is from CentOS Stream, but this does NOT affect the OS running inside the VM. The tool is just a converter that reads your RHEL-based bootc container image and creates a bootable disk. The VM will run RHEL 9 (from `registry.redhat.io/rhel9/rhel-bootc:latest`), not CentOS.
@@ -308,26 +334,57 @@ qemu-system-x86_64 -cpu qemu64,+ssse3,+sse4.1,+sse4.2,+popcnt ...
 
 ### Build Fails with NUMA Linking Error
 
-The Containerfile handles this automatically by:
+The build script (`scripts/build-vllm-from-source.sh`) handles this automatically by:
 - Removing `-lnuma` from CMakeLists.txt files
 - Creating a stub NUMA library if `numactl-devel` is not available
 
 If you still see errors, rebuild with `--no-cache`:
 ```bash
-podman build --no-cache -t localhost/rhoim-bootc-rhel:latest ...
+podman build --no-cache -t localhost/rhoim-bootc-rhel-amd64:latest ...
 ```
 
 ### Out of Memory During Build
 
 If build fails with `g++: fatal error: Killed`, reduce parallelism:
-- The Containerfile already sets `CMAKE_BUILD_PARALLEL_LEVEL=1` and `MAX_JOBS=1`
+- The build script already sets `CMAKE_BUILD_PARALLEL_LEVEL=1` and `MAX_JOBS=1`
 - If still failing, increase VM memory or reduce build parallelism further
+- You can modify `scripts/build-vllm-from-source.sh` to adjust parallelism if needed
+
+### Testing the Container (Before Building VM Image)
+
+You can test the container directly with Podman:
+
+```bash
+# Stop and remove existing container if it exists
+podman stop rhoim-bootc-test 2>/dev/null || true
+podman rm rhoim-bootc-test 2>/dev/null || true
+
+# Run the container
+podman run -d \
+  --name rhoim-bootc-test \
+  --platform linux/arm64 \
+  --privileged \
+  --systemd=always \
+  -p 8000:8000 \
+  localhost/rhoim-bootc-rhel-arm64:latest
+
+# Wait for service to start (30-60 seconds)
+sleep 30
+
+# Check service status
+podman exec rhoim-bootc-test systemctl status rhoim-vllm.service
+
+# Test API
+curl http://localhost:8000/v1/models
+```
 
 ## File Structure
 
 ```
 vllm-bootc/
-├── Containerfile
+├── Containerfile                  # Multi-stage build definition
+├── scripts/
+│   └── build-vllm-from-source.sh # vLLM source build script
 ├── etc/
 │   ├── sysconfig/
 │   │   └── rhoim                  # Environment defaults
