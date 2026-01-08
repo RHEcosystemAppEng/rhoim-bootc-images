@@ -3,6 +3,6 @@
 *.tfstate
 *.tfstate.*
 *.tfvars
-!terraform.tfvars.example
+!terraform.tfvars.template
 .terraform.lock.hcl
 opentofu.rc
