@@ -1,3 +1,9 @@
+### Build artifacts
+target/
+
+### Worktrees
+.worktrees/
+
 ### Intellij template
 .idea/**
 
