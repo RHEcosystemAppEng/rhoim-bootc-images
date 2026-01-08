@@ -23,7 +23,7 @@ variable "aws_region" {
 variable "instance_name" {
   description = "Name tag for the EC2 instance"
   type        = string
-  default     = "ccustine-rhoim-host"
+  default     = "rhoim-host"
 }
 
 variable "key_name" {
