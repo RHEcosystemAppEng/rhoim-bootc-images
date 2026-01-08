@@ -265,7 +265,7 @@ locals {
 
     # Copy entitlements for container builds
     cp /etc/pki/entitlement/*.pem /home/ec2-user/development/entitlement/
-    chmod 644 /home/ec2-user/development/entitlement/*.pem
+    chmod 600 /home/ec2-user/development/entitlement/*.pem
 
     # Copy RHSM config
     cp -r /etc/rhsm/* /home/ec2-user/development/rhsm/
