@@ -1,0 +1,13 @@
+# Common variables (both machines)
+aws_region       = "us-east-1"
+key_name         = "your-key-pair-name"
+ssh_cidr_blocks  = ["YOUR_IP/32"]       # Get with: curl checkip.amazonaws.com
+api_cidr_blocks  = ["YOUR_IP/32"]       # For vLLM API access (tester only)
+
+# Builder-specific (see builder/main.tf for all options)
+rhsm_activation_key      = "your-activation-key"
+rhsm_org_id              = "your-org-id"
+redhat_registry_username = "your-username"
+redhat_registry_token    = "your-token"
+quay_username            = "your-robot-account"
+quay_token               = "your-robot-token"
