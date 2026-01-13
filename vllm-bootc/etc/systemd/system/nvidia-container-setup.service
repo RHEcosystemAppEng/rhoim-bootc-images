@@ -1,0 +1,13 @@
+[Unit]
+Description=NVIDIA Container Toolkit Setup
+After=network.target
+Before=rhoim-vllm.service
+ConditionPathExists=!/var/lib/nvidia-container-setup-complete
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/nvidia-container-setup.sh
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
