@@ -20,10 +20,16 @@ variable "aws_region" {
   default     = "us-east-1"
 }
 
-variable "instance_name" {
-  description = "Name tag for the EC2 instance"
+variable "resource_prefix" {
+  description = "Prefix for all resource names (e.g., 'dev-rhoim-builder') - used for easy filtering and cleanup"
   type        = string
   default     = "rhoim-builder"
+}
+
+variable "instance_name" {
+  description = "Name tag for the EC2 instance (will use resource_prefix if not set)"
+  type        = string
+  default     = ""
 }
 
 variable "key_name" {
@@ -97,6 +103,16 @@ variable "quay_token" {
   sensitive   = true
 }
 
+# Local values for resource naming
+locals {
+  instance_name = var.instance_name != "" ? var.instance_name : var.resource_prefix
+  common_tags = {
+    Project     = "rhoim-bootc"
+    ManagedBy   = "opentofu"
+    ResourcePrefix = var.resource_prefix
+  }
+}
+
 # Get common networking info
 module "network" {
   source = "../modules/aws-network"
@@ -104,7 +120,7 @@ module "network" {
 
 # Security group for the builder instance
 resource "aws_security_group" "builder" {
-  name        = "${var.instance_name}-sg"
+  name        = "${local.instance_name}-sg"
   description = "Security group for RHEL image builder instance"
   vpc_id      = module.network.vpc_id
 
@@ -125,9 +141,9 @@ resource "aws_security_group" "builder" {
     cidr_blocks = ["0.0.0.0/0"]
   }
 
-  tags = {
-    Name = "${var.instance_name}-sg"
-  }
+  tags = merge({
+    Name = "${local.instance_name}-sg"
+  }, local.common_tags)
 }
 
 # Builder instance
@@ -150,9 +166,14 @@ resource "aws_instance" "builder" {
 
   user_data_base64 = base64encode(local.user_data)
 
-  tags = {
-    Name = var.instance_name
-  }
+  tags = merge({
+    Name = local.instance_name
+  }, local.common_tags)
+
+  # Tag the EBS volume with the same tags for easy filtering
+  volume_tags = merge({
+    Name = "${local.instance_name}-root"
+  }, local.common_tags)
 }
 
 locals {
