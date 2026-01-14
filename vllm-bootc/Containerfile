@@ -98,7 +98,14 @@ RUN --mount=type=secret,id=rhsm,target=/tmp/rhsm.conf \
       'enabled_metadata=1' > /etc/yum.repos.d/rhel9-appstream.repo && \
     KERNEL_VERSION=$(uname -r) && \
     echo "Installing NVIDIA kernel modules for kernel: ${KERNEL_VERSION}" && \
-    dnf -y install gcc make kernel-devel-${KERNEL_VERSION} kernel-headers-${KERNEL_VERSION} dkms && \
+    echo "Installing build tools..." && \
+    dnf -y install gcc make && \
+    echo "Installing kernel-devel (trying exact version first, then latest available)..." && \
+    dnf -y install kernel-devel-${KERNEL_VERSION} 2>/dev/null || \
+    dnf -y install kernel-devel kernel-headers && \
+    echo "Installing DKMS..." && \
+    dnf -y install dkms && \
+    echo "Installing NVIDIA kernel module packages..." && \
     dnf -y install kmod-nvidia-open-dkms nvidia-kmod-common && \
     echo "NVIDIA kernel modules installed. Removing build tools..." && \
     dnf -y remove gcc make 'kernel-devel-*' 'kernel-headers-*' dkms && \
