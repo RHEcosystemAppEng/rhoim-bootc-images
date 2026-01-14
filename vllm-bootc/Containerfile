@@ -109,8 +109,8 @@ RUN --mount=type=secret,id=rhsm,target=/tmp/rhsm.conf \
     dnf -y install dkms && \
     echo "Installing NVIDIA kernel module packages..." && \
     dnf -y install kmod-nvidia-open-dkms nvidia-kmod-common && \
-    echo "NVIDIA kernel modules installed. Removing build tools..." && \
-    dnf -y remove gcc make 'kernel-devel-*' 'kernel-headers-*' dkms && \
+    echo "NVIDIA kernel modules installed. Removing build tools (keeping dkms for runtime module building)..." && \
+    dnf -y remove gcc make 'kernel-devel-*' 'kernel-headers-*' && \
     dnf clean all
 
 # Remove RHEL repo files and entitlements after all package installations are complete
