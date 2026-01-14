@@ -1,0 +1,58 @@
+# Quadlet container unit file for vLLM
+# This file should be placed in /etc/containers/systemd/ or /usr/share/containers/systemd/
+# Systemd will automatically generate a service file from this
+
+[Unit]
+Description=RHOIM vLLM Model Serving Service (Podman Container)
+After=network-online.target podman.socket nvidia-container-setup.service podman-registry-login.service
+Wants=network-online.target
+Requires=podman.socket
+
+[Container]
+# Container image
+Image=registry.redhat.io/rhaiis/vllm-cuda-rhel9@sha256:094db84a1da5e8a575d0c9eade114fa30f4a2061064a338e3e032f3578f8082a
+
+# Container name
+ContainerName=rhoim-vllm
+
+# Network mode
+Network=host
+
+# GPU support via NVIDIA Container Toolkit
+AddDevice=nvidia.com/gpu=all
+
+# Security options
+SecurityLabelDisable=true
+
+# Volume mounts
+Volume=/tmp/models:/models:Z
+
+# Environment variables (can be overridden by EnvironmentFile)
+Environment=VLLM_MODEL=TinyLlama/TinyLlama-1.1B-Chat-v1.0
+Environment=HOST=0.0.0.0
+Environment=PORT=8000
+
+# Load additional environment variables from sysconfig
+EnvironmentFile=-/etc/sysconfig/rhoim
+
+# Auto-update policy
+AutoUpdate=registry
+
+# Restart policy
+Restart=always
+RestartSec=10
+
+# Pull policy
+Pull=always
+
+[Service]
+# Restart policy
+Restart=always
+RestartSec=10
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
