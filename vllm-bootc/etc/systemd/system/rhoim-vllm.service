@@ -1,6 +1,6 @@
 [Unit]
 Description=RHOIM vLLM Model Serving Service (Podman Container)
-After=network-online.target podman.socket nvidia-container-setup.service
+After=network-online.target podman.socket nvidia-container-setup.service podman-registry-login.service
 Wants=network-online.target
 Requires=podman.socket
 

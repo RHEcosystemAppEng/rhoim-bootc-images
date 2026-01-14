@@ -19,7 +19,17 @@ VLLM_IMAGE="registry.redhat.io/rhaiis/vllm-cuda-rhel9@sha256:094db84a1da5e8a575d
 # Ensure model directory exists
 mkdir -p "${MODEL_PATH}"
 
+# Pull the image first (will use cached credentials if logged in)
+echo "=== Pulling vLLM container image ==="
+podman pull "${VLLM_IMAGE}" || {
+    echo "[ERROR] Failed to pull vLLM container image"
+    echo "[ERROR] Ensure registry credentials are configured in /etc/sysconfig/rhoim"
+    echo "[ERROR] Or login manually: podman login registry.redhat.io"
+    exit 1
+}
+
 # Run podman container with GPU support
+echo "=== Starting vLLM container ==="
 exec /usr/bin/podman run \
     --rm \
     --name rhoim-vllm \

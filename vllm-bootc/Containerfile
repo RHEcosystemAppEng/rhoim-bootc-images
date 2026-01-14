@@ -30,15 +30,18 @@ COPY etc/ /etc/
 # Copy scripts
 COPY scripts/nvidia-container-setup.sh /usr/local/bin/nvidia-container-setup.sh
 COPY scripts/run-vllm-container.sh /usr/local/bin/run-vllm-container.sh
+COPY scripts/podman-registry-login.sh /usr/local/bin/podman-registry-login.sh
 
 # Create necessary directories and setup
 RUN chmod +x /usr/local/bin/nvidia-container-setup.sh && \
     chmod +x /usr/local/bin/run-vllm-container.sh && \
+    chmod +x /usr/local/bin/podman-registry-login.sh && \
     mkdir -p /opt/rhoim/{bin,models,gateway} /tmp/models && \
     # Create /sysroot directory required by bootc lint
     mkdir -p /sysroot && \
     # Enable services
     systemctl enable nvidia-container-setup.service && \
+    systemctl enable podman-registry-login.service && \
     systemctl enable rhoim-vllm.service
 
 # vLLM listens here

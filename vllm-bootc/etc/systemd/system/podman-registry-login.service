@@ -1,0 +1,22 @@
+[Unit]
+Description=Podman Registry Login for Red Hat Registry
+After=network-online.target podman.socket
+Before=rhoim-vllm.service
+Wants=network-online.target
+Requires=podman.socket
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+
+# Load configuration from /etc/sysconfig/rhoim
+EnvironmentFile=-/etc/sysconfig/rhoim
+
+# Login to Red Hat registry if credentials are provided
+ExecStart=/usr/local/bin/podman-registry-login.sh
+
+StandardOutput=journal+console
+StandardError=journal+console
+
+[Install]
+WantedBy=multi-user.target

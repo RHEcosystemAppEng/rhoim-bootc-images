@@ -27,3 +27,10 @@ VLLM_DEVICE_TYPE="auto"
 API_KEYS="devkey1,devkey2"
 # BASE_PATH=/ # (If used by your gateway)
 # ENABLE_RHOAI_ALIAS=true # (If used by your gateway)
+
+# --- Red Hat Registry Credentials (Required for pulling vLLM container image) ---
+# These credentials are used to authenticate with registry.redhat.io
+# Set these during bootc install or via systemd override
+# Example: bootc install --env REDHAT_REGISTRY_USERNAME=your-username --env REDHAT_REGISTRY_TOKEN=your-token ...
+# REDHAT_REGISTRY_USERNAME="your-redhat-username"
+# REDHAT_REGISTRY_TOKEN="your-redhat-token"
