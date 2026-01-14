@@ -43,7 +43,7 @@ RUN --mount=type=secret,id=rhsm,target=/tmp/rhsm.conf \
       'sslclientcert=/etc/pki/entitlement/cert.pem' \
       'metadata_expire=86400' \
       'enabled_metadata=1' > /etc/yum.repos.d/rhel9-appstream.repo && \
-    dnf -y install podman skopeo systemd && \
+    dnf -v -y install podman skopeo systemd && \
     dnf clean all
 
 # Add NVIDIA CUDA repository
