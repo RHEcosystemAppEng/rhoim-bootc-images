@@ -69,6 +69,14 @@ RUN systemctl enable podman.socket
 RUN systemctl enable nm-cloud-setup.service && \
     systemctl enable nm-cloud-setup.timer
 
+# Configure NetworkManager to use cloud-setup plugin
+# This ensures NetworkManager can configure network from AWS instance metadata
+RUN mkdir -p /etc/NetworkManager/conf.d && \
+    printf '%s\n' \
+      '[main]' \
+      '# Enable cloud setup for AWS EC2 instance metadata' \
+      'plugins=keyfile,ifcfg-rh,cloud-setup' > /etc/NetworkManager/conf.d/99-cloud-init.conf
+
 # Copy systemd service and configuration files
 COPY etc/ /etc/
 
