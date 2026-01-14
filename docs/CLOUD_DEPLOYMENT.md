@@ -270,99 +270,195 @@ az storage blob upload \
 
 ## AWS Deployment
 
-### Prerequisites
+### ⚠️ Important: AWS AMI Import Limitations
+
+**AWS has strict validation rules for imported images that often cause issues with bootc images:**
+
+1. **Partition Table Requirements**: AWS expects specific partition layouts (GPT with specific partitions)
+2. **Boot Loader Compatibility**: Bootc uses ostree/GRUB2 which may not match AWS expectations
+3. **Root Device Name**: Must match AWS conventions (`/dev/sda1`, `/dev/xvda`, etc.)
+4. **File System Support**: Only ext4, xfs, and btrfs are fully supported
+5. **Image Size**: Must meet minimum size requirements (typically 8GB+)
+6. **UEFI vs Legacy Boot**: AWS validation may reject UEFI-only images in some cases
+
+**Result**: Direct AMI import from raw disk images often fails AWS validation, especially with bootc/ostree-based images.
+
+### Recommended Approach: Direct EBS Installation (Most Reliable)
+
+Instead of importing a disk image, install the bootc image directly to an EBS volume on an existing EC2 instance. This bypasses AWS validation issues.
+
+#### Prerequisites
 
 - AWS CLI installed and configured
-- EC2 permissions
-- Container image built and available
-- S3 bucket for storing disk images
+- EC2 instance running RHEL 9 with bootc installed (your builder VM)
+- EC2 permissions to create/manage EBS volumes and snapshots
+- Container image built and available locally
 
-### Steps
+#### Steps
 
-1. **Build the Bootable Image**
+1. **Build the Bootc Container Image** (if not already done)
 
    ```bash
-   podman build -t localhost/rhoim-bootc-rhel:latest -f vllm-cpu/Containerfile .
+   # On your builder VM
+   cd ~/rhoim-bootc-images/vllm-bootc
+   sudo podman build --platform linux/amd64 \
+     --secret id=rhsm,src=/etc/rhsm/rhsm.conf \
+     --secret id=ca,src=/etc/rhsm/ca/redhat-uep.pem \
+     --secret id=key,src=/etc/pki/entitlement/4045241115620640280-key.pem \
+     --secret id=cert,src=/etc/pki/entitlement/4045241115620640280.pem \
+     -t localhost/rhoim-vllm-bootc:latest .
    ```
 
-2. **Create Bootable Disk Image**
+2. **Create and Attach EBS Volume**
 
-   Create a qcow2 image first, then convert to raw:
    ```bash
-   mkdir -p images
-   podman run --rm --privileged \
-     -v /var/lib/containers/storage:/var/lib/containers/storage \
-     -v "$(pwd)/images":/output \
-     quay.io/centos-bootc/bootc-image-builder:latest \
-     --type qcow2 \
-     localhost/rhoim-bootc-rhel:latest
+   # Create a 20GB EBS volume (adjust size as needed)
+   VOLUME_ID=$(aws ec2 create-volume \
+     --region us-east-1 \
+     --availability-zone us-east-1a \
+     --size 20 \
+     --volume-type gp3 \
+     --query 'VolumeId' --output text)
+
+   # Attach to your builder instance
+   INSTANCE_ID=$(curl -s http://169.254.169.254/latest/meta-data/instance-id)
+   aws ec2 attach-volume \
+     --region us-east-1 \
+     --volume-id $VOLUME_ID \
+     --instance-id $INSTANCE_ID \
+     --device /dev/sdf
+
+   # Wait for attachment
+   sleep 5
    ```
 
-3. **Convert qcow2 to Raw Format**
+3. **Find the Attached Volume**
 
    ```bash
-   # Convert qcow2 to raw
-   qemu-img convert -f qcow2 -O raw images/qcow2/disk.qcow2 images/qcow2/disk.raw
-
-   # Compress for faster upload (optional)
-   gzip images/qcow2/disk.raw
+   # On the builder VM
+   lsblk
+   # Look for the new volume (e.g., /dev/nvme1n1 or /dev/xvdf)
+   # Note: AWS uses nvme interface, so it might be /dev/nvme1n1
    ```
 
-4. **Upload to S3**
+4. **Install Bootc Image to EBS Volume**
 
    ```bash
-   # Create S3 bucket (if it doesn't exist)
-   aws s3 mb s3://your-bucket-name
+   # Install bootc image directly to the volume
+   sudo bootc install \
+     --root-fs-type ext4 \
+     --karg console=ttyS0,115200n8 \
+     --karg root=LABEL=root \
+     localhost/rhoim-vllm-bootc:latest \
+     /dev/nvme1n1  # Use the device from lsblk
 
-   # Upload raw image
-   aws s3 cp images/qcow2/disk.raw s3://your-bucket/bootc-images/your-image.raw
-
-   # Or if compressed
-   aws s3 cp images/qcow2/disk.raw.gz s3://your-bucket/bootc-images/your-image.raw.gz
+   # Verify installation
+   sudo partprobe /dev/nvme1n1
+   sudo lsblk -f /dev/nvme1n1
    ```
 
-5. **Import Snapshot**
+5. **Detach Volume and Create Snapshot**
 
    ```bash
-   # Import snapshot from S3
-   aws ec2 import-snapshot \
-     --disk-container Format=RAW,UserBucket="{S3Bucket=your-bucket,S3Key=bootc-images/your-image.raw}"
-   ```
+   # Detach volume
+   aws ec2 detach-volume \
+     --region us-east-1 \
+     --volume-id $VOLUME_ID
 
-   Note the `ImportTaskId` from the output. Check import status:
-   ```bash
-   aws ec2 describe-import-snapshot-tasks --import-task-ids <ImportTaskId>
+   # Wait for detachment
+   aws ec2 wait volume-available --volume-ids $VOLUME_ID --region us-east-1
+
+   # Create snapshot
+   SNAPSHOT_ID=$(aws ec2 create-snapshot \
+     --region us-east-1 \
+     --volume-id $VOLUME_ID \
+     --description "RHOIM vLLM Bootc Image" \
+     --query 'SnapshotId' --output text)
+
+   # Wait for snapshot to complete
+   aws ec2 wait snapshot-completed \
+     --region us-east-1 \
+     --snapshot-ids $SNAPSHOT_ID
    ```
 
 6. **Create AMI from Snapshot**
 
-   Once the snapshot import is complete:
    ```bash
-   # Get the snapshot ID from the import task
-   SNAPSHOT_ID=$(aws ec2 describe-import-snapshot-tasks \
-     --import-task-ids <ImportTaskId> \
-     --query 'ImportSnapshotTasks[0].SnapshotTaskDetail.SnapshotId' \
-     --output text)
-
    # Create AMI from snapshot
-   aws ec2 register-image \
-     --name rhoim-bootc-rhel \
+   AMI_ID=$(aws ec2 register-image \
+     --region us-east-1 \
+     --name rhoim-vllm-bootc-$(date +%Y%m%d) \
      --root-device-name /dev/sda1 \
-     --block-device-mappings "[{\"DeviceName\":\"/dev/sda1\",\"Ebs\":{\"SnapshotId\":\"$SNAPSHOT_ID\"}}]"
+     --virtualization-type hvm \
+     --architecture x86_64 \
+     --block-device-mappings "[{\"DeviceName\":\"/dev/sda1\",\"Ebs\":{\"SnapshotId\":\"$SNAPSHOT_ID\",\"VolumeType\":\"gp3\",\"DeleteOnTermination\":true}}]" \
+     --query 'ImageId' --output text)
+
+   echo "AMI created: $AMI_ID"
    ```
 
-7. **Launch EC2 Instance**
+7. **Launch EC2 Instance from AMI**
 
-   Use the AMI to launch an instance:
    ```bash
+   # Launch instance from AMI
    aws ec2 run-instances \
-     --image-id <AMI-ID> \
-     --instance-type t3.medium \
+     --region us-east-1 \
+     --image-id $AMI_ID \
+     --instance-type g4dn.xlarge \  # For GPU support
      --key-name your-key-pair \
-     --security-group-ids sg-xxxxxxxxx
+     --security-group-ids sg-xxxxxxxxx \
+     --subnet-id subnet-xxxxxxxxx
    ```
 
-   **Note**: For vLLM with CPU optimizations, consider using instances with AVX-512 support (e.g., `c5.xlarge` or `c5.2xlarge`).
+### Alternative: S3 Import Method (May Fail Validation)
+
+If you want to try the S3 import method despite validation issues:
+
+1. **Build Bootable Disk Image**
+
+   ```bash
+   mkdir -p images
+   sudo podman run --rm --privileged \
+     -v /var/lib/containers/storage:/var/lib/containers/storage \
+     -v "$(pwd)/images":/output \
+     quay.io/centos-bootc/bootc-image-builder:latest \
+     --type qcow2 \
+     localhost/rhoim-vllm-bootc:latest
+   ```
+
+2. **Convert and Prepare for AWS**
+
+   ```bash
+   # Convert to raw
+   qemu-img convert -f qcow2 -O raw images/qcow2/disk.qcow2 images/qcow2/disk.raw
+
+   # Resize to meet AWS minimum (if needed)
+   qemu-img resize images/qcow2/disk.raw 10G
+   ```
+
+3. **Upload and Import**
+
+   ```bash
+   # Upload to S3
+   aws s3 cp images/qcow2/disk.raw s3://your-bucket/bootc-images/disk.raw
+
+   # Import snapshot
+   IMPORT_TASK_ID=$(aws ec2 import-snapshot \
+     --disk-container Format=RAW,UserBucket="{S3Bucket=your-bucket,S3Key=bootc-images/disk.raw}" \
+     --query 'ImportTaskId' --output text)
+
+   # Check status
+   aws ec2 describe-import-snapshot-tasks --import-task-ids $IMPORT_TASK_ID
+   ```
+
+**⚠️ Note**: This method often fails AWS validation. Use the direct EBS installation method above for better reliability.
+
+### Troubleshooting AWS Deployment
+
+- **AMI validation fails**: Use the direct EBS installation method instead
+- **Instance doesn't boot**: Check EC2 console logs, verify UEFI boot support
+- **Root device not found**: Ensure `--root-device-name` matches the partition layout
+- **Snapshot import fails**: Check S3 permissions and file format (must be uncompressed raw)
 
 ## General Cloud Deployment
 
