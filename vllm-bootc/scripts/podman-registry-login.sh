@@ -36,9 +36,12 @@ else
     fi
 fi
 
-# Login to Red Hat registry
+# Ensure auth file directory exists
+mkdir -p /root/.config/containers
+
+# Login to Red Hat registry with explicit authfile
 echo "=== Logging into Red Hat registry ==="
-if echo "${REDHAT_REGISTRY_TOKEN}" | podman login --username "${REDHAT_REGISTRY_USER}" --password-stdin registry.redhat.io 2>&1; then
+if echo "${REDHAT_REGISTRY_TOKEN}" | podman login --authfile /root/.config/containers/auth.json --username "${REDHAT_REGISTRY_USER}" --password-stdin registry.redhat.io 2>&1; then
     echo "[SUCCESS] Red Hat registry login completed"
     # Mark login as successful
     touch /var/lib/podman-registry-login-complete

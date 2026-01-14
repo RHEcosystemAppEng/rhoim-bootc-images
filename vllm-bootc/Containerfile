@@ -43,7 +43,7 @@ RUN --mount=type=secret,id=rhsm,target=/tmp/rhsm.conf \
       'sslclientcert=/etc/pki/entitlement/cert.pem' \
       'metadata_expire=86400' \
       'enabled_metadata=1' > /etc/yum.repos.d/rhel9-appstream.repo && \
-    dnf -y install podman skopeo systemd NetworkManager-cloud-setup && \
+    dnf -y install podman skopeo systemd && \
     dnf clean all
 
 # Add NVIDIA CUDA repository
@@ -56,6 +56,54 @@ RUN curl -s -L https://nvidia.github.io/libnvidia-container/stable/rpm/nvidia-co
     dnf -y install --nogpgcheck nvidia-container-toolkit && \
     dnf clean all
 
+# Install NVIDIA kernel modules
+# These are needed on the host OS for GPU access from containers
+# We install during build when RHEL repos are available
+# Note: kmod-nvidia-open-dkms uses DKMS which will compile modules during build
+#       if pre-compiled versions aren't available. Build tools are removed after installation.
+RUN --mount=type=secret,id=rhsm,target=/tmp/rhsm.conf \
+    --mount=type=secret,id=ca,target=/tmp/redhat-uep.pem \
+    --mount=type=secret,id=key,target=/tmp/key.pem \
+    --mount=type=secret,id=cert,target=/tmp/cert.pem \
+    mkdir -p /etc/rhsm/ca /etc/pki/entitlement /etc/yum.repos.d && \
+    cp /tmp/rhsm.conf /etc/rhsm/rhsm.conf && \
+    cp /tmp/redhat-uep.pem /etc/rhsm/ca/redhat-uep.pem && \
+    cp /tmp/key.pem /etc/pki/entitlement/key.pem && \
+    cp /tmp/cert.pem /etc/pki/entitlement/cert.pem && \
+    printf '%s\n' \
+      '[rhel-9-for-x86_64-baseos-rpms]' \
+      'name=Red Hat Enterprise Linux 9 for x86_64 - BaseOS (RPMs)' \
+      'baseurl=https://cdn.redhat.com/content/dist/rhel9/9/x86_64/baseos/os' \
+      'enabled=1' \
+      'gpgcheck=1' \
+      'gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-redhat-release' \
+      'sslverify=1' \
+      'sslcacert=/etc/rhsm/ca/redhat-uep.pem' \
+      'sslclientkey=/etc/pki/entitlement/key.pem' \
+      'sslclientcert=/etc/pki/entitlement/cert.pem' \
+      'metadata_expire=86400' \
+      'enabled_metadata=1' > /etc/yum.repos.d/rhel9-baseos.repo && \
+    printf '%s\n' \
+      '[rhel-9-for-x86_64-appstream-rpms]' \
+      'name=Red Hat Enterprise Linux 9 for x86_64 - AppStream (RPMs)' \
+      'baseurl=https://cdn.redhat.com/content/dist/rhel9/9/x86_64/appstream/os' \
+      'enabled=1' \
+      'gpgcheck=1' \
+      'gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-redhat-release' \
+      'sslverify=1' \
+      'sslcacert=/etc/rhsm/ca/redhat-uep.pem' \
+      'sslclientkey=/etc/pki/entitlement/key.pem' \
+      'sslclientcert=/etc/pki/entitlement/cert.pem' \
+      'metadata_expire=86400' \
+      'enabled_metadata=1' > /etc/yum.repos.d/rhel9-appstream.repo && \
+    KERNEL_VERSION=$(uname -r) && \
+    echo "Installing NVIDIA kernel modules for kernel: ${KERNEL_VERSION}" && \
+    dnf -y install gcc make kernel-devel-${KERNEL_VERSION} kernel-headers-${KERNEL_VERSION} dkms && \
+    dnf -y install kmod-nvidia-open-dkms nvidia-kmod-common && \
+    echo "NVIDIA kernel modules installed. Removing build tools..." && \
+    dnf -y remove gcc make 'kernel-devel-*' 'kernel-headers-*' dkms && \
+    dnf clean all
+
 # Remove RHEL repo files and entitlements after all package installations are complete
 # This prevents the image from trying to access repos at runtime without credentials
 RUN rm -f /etc/yum.repos.d/rhel9-baseos.repo /etc/yum.repos.d/rhel9-appstream.repo && \
@@ -63,19 +111,6 @@ RUN rm -f /etc/yum.repos.d/rhel9-baseos.repo /etc/yum.repos.d/rhel9-appstream.re
 
 # Enable and start podman socket
 RUN systemctl enable podman.socket
-
-# Enable NetworkManager cloud setup for AWS network configuration
-# This is required for AWS EC2 instances to configure network from instance metadata
-RUN systemctl enable nm-cloud-setup.service && \
-    systemctl enable nm-cloud-setup.timer
-
-# Configure NetworkManager to use cloud-setup plugin
-# This ensures NetworkManager can configure network from AWS instance metadata
-RUN mkdir -p /etc/NetworkManager/conf.d && \
-    printf '%s\n' \
-      '[main]' \
-      '# Enable cloud setup for AWS EC2 instance metadata' \
-      'plugins=keyfile,ifcfg-rh,cloud-setup' > /etc/NetworkManager/conf.d/99-cloud-init.conf
 
 # Copy systemd service and configuration files
 COPY etc/ /etc/
@@ -92,6 +127,8 @@ RUN chmod +x /usr/local/bin/nvidia-container-setup.sh && \
     mkdir -p /opt/rhoim/{bin,models,gateway} /tmp/models && \
     # Create /sysroot directory required by bootc lint
     mkdir -p /sysroot && \
+    # Create podman auth directory for registry credentials (required for --authfile)
+    mkdir -p /root/.config/containers && \
     # Enable services
     systemctl enable nvidia-container-setup.service && \
     systemctl enable podman-registry-login.service && \

@@ -21,7 +21,7 @@ mkdir -p "${MODEL_PATH}"
 
 # Pull the image first (will use cached credentials if logged in)
 echo "=== Pulling vLLM container image ==="
-podman pull "${VLLM_IMAGE}" || {
+podman pull --authfile /root/.config/containers/auth.json "${VLLM_IMAGE}" || {
     echo "[ERROR] Failed to pull vLLM container image"
     echo "[ERROR] Ensure registry credentials are configured in /etc/sysconfig/rhoim"
     echo "[ERROR] Or login manually: podman login registry.redhat.io"
