@@ -103,10 +103,11 @@ RUN --mount=type=secret,id=rhsm,target=/tmp/rhsm.conf \
     echo "Installing kernel-devel (trying exact version first, then latest available)..." && \
     dnf -y install kernel-devel-${KERNEL_VERSION} 2>/dev/null || \
     dnf -y install kernel-devel kernel-headers && \
-    echo "Installing EPEL repository for dkms..." && \
-    dnf -y install epel-release && \
+    echo "Adding EPEL repository for dkms..." && \
+    dnf -y install https://dl.fedoraproject.org/pub/epel/epel-release-latest-9.noarch.rpm || \
+    (dnf config-manager --add-repo https://dl.fedoraproject.org/pub/epel/epel.repo && dnf config-manager --set-enabled epel) && \
     echo "Installing DKMS from EPEL..." && \
-    dnf -y install dkms || { echo "Warning: dkms installation failed, but continuing..." && true; } && \
+    dnf -y install dkms && \
     echo "Installing NVIDIA kernel module packages..." && \
     dnf -y install kmod-nvidia-open-dkms nvidia-kmod-common && \
     echo "NVIDIA kernel modules installed. Removing build tools..." && \
