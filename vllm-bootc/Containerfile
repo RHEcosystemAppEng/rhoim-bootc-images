@@ -103,8 +103,9 @@ RUN --mount=type=secret,id=rhsm,target=/tmp/rhsm.conf \
     echo "Installing kernel-devel (trying exact version first, then latest available)..." && \
     dnf -y install kernel-devel-${KERNEL_VERSION} 2>/dev/null || \
     dnf -y install kernel-devel kernel-headers && \
-    echo "Installing DKMS..." && \
-    dnf -y install dkms && \
+    echo "Installing DKMS (from EPEL if needed)..." && \
+    dnf -y install epel-release && \
+    dnf -y install dkms || echo "Warning: dkms not available, continuing anyway" && \
     echo "Installing NVIDIA kernel module packages..." && \
     dnf -y install kmod-nvidia-open-dkms nvidia-kmod-common && \
     echo "NVIDIA kernel modules installed. Removing build tools..." && \
