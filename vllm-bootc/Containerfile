@@ -12,12 +12,12 @@ RUN --mount=type=secret,id=rhsm,target=/tmp/rhsm.conf \
     --mount=type=secret,id=ca,target=/tmp/redhat-uep.pem \
     --mount=type=secret,id=key,target=/tmp/key.pem \
     --mount=type=secret,id=cert,target=/tmp/cert.pem \
-    mkdir -p /etc/rhsm/ca /etc/pki/entitlement /etc/yum.repos.d && \
+    bash -c 'mkdir -p /etc/rhsm/ca /etc/pki/entitlement /etc/yum.repos.d && \
     cp /tmp/rhsm.conf /etc/rhsm/rhsm.conf && \
     cp /tmp/redhat-uep.pem /etc/rhsm/ca/redhat-uep.pem && \
     cp /tmp/key.pem /etc/pki/entitlement/key.pem && \
     cp /tmp/cert.pem /etc/pki/entitlement/cert.pem && \
-    cat > /etc/yum.repos.d/rhel9-baseos.repo <<'REPO_EOF'
+    cat > /etc/yum.repos.d/rhel9-baseos.repo <<'\''REPO_EOF'\''
 [rhel-9-for-x86_64-baseos-rpms]
 name=Red Hat Enterprise Linux 9 for x86_64 - BaseOS (RPMs)
 baseurl=https://cdn.redhat.com/content/dist/rhel9/9/x86_64/baseos/os
@@ -31,7 +31,7 @@ sslclientcert=/etc/pki/entitlement/cert.pem
 metadata_expire=86400
 enabled_metadata=1
 REPO_EOF
-    cat > /etc/yum.repos.d/rhel9-appstream.repo <<'REPO_EOF'
+    cat > /etc/yum.repos.d/rhel9-appstream.repo <<'\''REPO_EOF'\''
 [rhel-9-for-x86_64-appstream-rpms]
 name=Red Hat Enterprise Linux 9 for x86_64 - AppStream (RPMs)
 baseurl=https://cdn.redhat.com/content/dist/rhel9/9/x86_64/appstream/os
@@ -45,12 +45,9 @@ sslclientcert=/etc/pki/entitlement/cert.pem
 metadata_expire=86400
 enabled_metadata=1
 REPO_EOF
-    dnf -y install \
-      podman \
-      skopeo \
-      systemd \
-    && dnf clean all && \
-    rm -rf /etc/rhsm /etc/pki/entitlement
+    dnf -y install podman skopeo systemd && \
+    dnf clean all && \
+    rm -rf /etc/rhsm /etc/pki/entitlement'
 
 # Add NVIDIA CUDA repository
 RUN dnf config-manager --add-repo https://developer.download.nvidia.com/compute/cuda/repos/rhel9/x86_64/cuda-rhel9.repo
