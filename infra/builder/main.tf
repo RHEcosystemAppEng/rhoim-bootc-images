@@ -258,14 +258,16 @@ locals {
     fi
 
     # Step 5: Login to Red Hat registry
+    # Red Hat registry requires username in format: org_id|username
     echo "=== Logging into Red Hat registry ==="
-    if echo "${var.redhat_registry_token}" | podman login --username "${var.redhat_registry_username}" --password-stdin registry.redhat.io 2>&1; then
+    REDHAT_REGISTRY_USER="${var.rhsm_org_id}|${var.redhat_registry_username}"
+    if echo "${var.redhat_registry_token}" | podman login --username "${REDHAT_REGISTRY_USER}" --password-stdin registry.redhat.io 2>&1; then
       echo "[SUCCESS] Red Hat registry login completed"
       REDHAT_REGISTRY_SUCCESS=true
     else
       echo "[WARNING] Red Hat registry login failed - continuing setup"
       echo "[WARNING] You can login manually later with:"
-      echo "  echo '${var.redhat_registry_token}' | podman login --username '${var.redhat_registry_username}' --password-stdin registry.redhat.io"
+      echo "  echo '${var.redhat_registry_token}' | podman login --username '${REDHAT_REGISTRY_USER}' --password-stdin registry.redhat.io"
       REDHAT_REGISTRY_SUCCESS=false
     fi
 

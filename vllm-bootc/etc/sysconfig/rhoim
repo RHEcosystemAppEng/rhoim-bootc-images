@@ -32,5 +32,14 @@ API_KEYS="devkey1,devkey2"
 # These credentials are used to authenticate with registry.redhat.io
 # Set these during bootc install or via systemd override
 # Example: bootc install --env REDHAT_REGISTRY_USERNAME=your-username --env REDHAT_REGISTRY_TOKEN=your-token ...
+# 
+# Username format: Red Hat registry requires "org_id|username" format
+# Option 1: Provide username in correct format (recommended)
+#   REDHAT_REGISTRY_USERNAME="11009103|your-username"
+# Option 2: Provide org_id separately (script will construct the format)
+#   REDHAT_REGISTRY_ORG_ID="11009103"
+#   REDHAT_REGISTRY_USERNAME="your-username"
+# Option 3: Just username (script will try to detect org_id from subscription-manager)
+#   REDHAT_REGISTRY_USERNAME="your-username"
 # REDHAT_REGISTRY_USERNAME="your-redhat-username"
 # REDHAT_REGISTRY_TOKEN="your-redhat-token"

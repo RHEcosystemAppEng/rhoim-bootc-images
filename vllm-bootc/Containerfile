@@ -6,11 +6,27 @@ FROM registry.redhat.io/rhel9/rhel-bootc:latest
 
 # Install podman and NVIDIA CUDA libraries dependencies
 # These are needed to run the vLLM CUDA container
-RUN dnf -y install \
+# Mount RHSM secrets to enable repository access during build
+# Copy entitlements to container and enable repos
+RUN --mount=type=secret,id=rhsm,target=/tmp/rhsm.conf \
+    --mount=type=secret,id=ca,target=/tmp/redhat-uep.pem \
+    --mount=type=secret,id=key,target=/tmp/key.pem \
+    --mount=type=secret,id=cert,target=/tmp/cert.pem \
+    mkdir -p /etc/rhsm/ca /etc/pki/entitlement && \
+    cp /tmp/rhsm.conf /etc/rhsm/rhsm.conf && \
+    cp /tmp/redhat-uep.pem /etc/rhsm/ca/redhat-uep.pem && \
+    cp /tmp/key.pem /etc/pki/entitlement/key.pem && \
+    cp /tmp/cert.pem /etc/pki/entitlement/cert.pem && \
+    subscription-manager config --rhsm.manage_repos=1 && \
+    subscription-manager repos \
+      --enable=rhel-9-for-x86_64-baseos-rpms \
+      --enable=rhel-9-for-x86_64-appstream-rpms && \
+    dnf -y install \
       podman \
       skopeo \
       systemd \
-    && dnf clean all
+    && dnf clean all && \
+    rm -rf /etc/rhsm /etc/pki/entitlement
 
 # Add NVIDIA CUDA repository
 RUN dnf config-manager --add-repo https://developer.download.nvidia.com/compute/cuda/repos/rhel9/x86_64/cuda-rhel9.repo
