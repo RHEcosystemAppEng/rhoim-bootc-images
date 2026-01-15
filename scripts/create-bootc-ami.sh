@@ -169,56 +169,20 @@ DEVICE_PATH="/dev/$DEVICE"
 echo "Using device: $DEVICE_PATH"
 lsblk "$DEVICE_PATH"
 
-# Step 4: Install Bootc Image with SSH Keys
+# Step 4: Install Bootc Image
 echo ""
-echo "=== Step 4: Installing Bootc Image (with SSH keys) ==="
+echo "=== Step 4: Installing Bootc Image ==="
 echo "This will install the bootc image to $DEVICE_PATH"
-echo "SSH keys from $SSH_KEY_FILE will be included"
 echo ""
 
 # Run bootc install from inside the container (required per bootc docs)
 # The container must be run with --privileged, --pid=host, and device access to see block devices
-# Expand SSH_KEY_FILE to absolute path to ensure it works with sudo
-SSH_KEY_ABS=$(readlink -f "$SSH_KEY_FILE" 2>/dev/null || echo "$SSH_KEY_FILE")
-if [[ "$SSH_KEY_ABS" != /* ]]; then
-    SSH_KEY_ABS="$HOME/$SSH_KEY_ABS"
-fi
-
-# Verify the file exists before mounting
-if [ ! -f "$SSH_KEY_ABS" ]; then
-    echo -e "${RED}Error: SSH key file not found: $SSH_KEY_ABS${NC}"
-    exit 1
-fi
-
-# Create a temporary file with the SSH keys content in /tmp with world-readable permissions
-# Create it with sudo to ensure proper permissions for podman access
-TMP_SSH_KEYS="/tmp/bootc-ssh-keys-$$"
-sudo cp "$SSH_KEY_ABS" "$TMP_SSH_KEYS"
-sudo chmod 644 "$TMP_SSH_KEYS"
-
-# Cleanup function
-cleanup_ssh_keys() {
-    sudo rm -f "$TMP_SSH_KEYS"
-}
-trap cleanup_ssh_keys EXIT
-
-# Verify the temp file exists and is readable
-if [ ! -r "$TMP_SSH_KEYS" ]; then
-    echo -e "${RED}Error: Failed to create temporary SSH keys file${NC}"
-    exit 1
-fi
-
-echo "SSH keys file prepared: $TMP_SSH_KEYS"
-
-# Run bootc install with SSH keys
-# Mount the SSH keys file and copy it to /tmp/ssh_keys inside the container
-# Ensure /tmp exists and the file is accessible when bootc reads it
+# Note: SSH keys will be injected AFTER installation (see Step 5) to avoid file access issues
 sudo podman run --rm --privileged --pid=host \
     --device-cgroup-rule='b *:* rmw' \
     -v /dev:/dev \
-    -v "$TMP_SSH_KEYS:/tmp/ssh_keys_source:ro,Z" \
     "$IMAGE_NAME" \
-    sh -c "mkdir -p /tmp && cp /tmp/ssh_keys_source /tmp/ssh_keys && chmod 644 /tmp/ssh_keys && ls -la /tmp/ssh_keys && cat /tmp/ssh_keys && bootc install to-disk --wipe --filesystem ext4 --karg console=ttyS0,115200n8 --karg root=LABEL=root --root-ssh-authorized-keys /tmp/ssh_keys $DEVICE_PATH"
+    bootc install to-disk --wipe --filesystem ext4 --karg console=ttyS0,115200n8 --karg root=LABEL=root "$DEVICE_PATH"
 
 echo -e "${GREEN}✅ Bootc image installed${NC}"
 
@@ -228,7 +192,62 @@ echo ""
 echo "Partition layout:"
 sudo lsblk -f "$DEVICE_PATH"
 
-# Step 5: Inject Registry Credentials (if provided)
+# Step 5: Inject SSH Keys
+echo ""
+echo "=== Step 5: Injecting SSH Keys ==="
+# Expand SSH_KEY_FILE to absolute path
+SSH_KEY_ABS=$(readlink -f "$SSH_KEY_FILE" 2>/dev/null || echo "$SSH_KEY_FILE")
+if [[ "$SSH_KEY_ABS" != /* ]]; then
+    SSH_KEY_ABS="$HOME/$SSH_KEY_ABS"
+fi
+
+# Verify the file exists
+if [ ! -f "$SSH_KEY_ABS" ]; then
+    echo -e "${RED}Error: SSH key file not found: $SSH_KEY_ABS${NC}"
+    exit 1
+fi
+
+# Find root partition (usually the largest partition)
+ROOT_PARTITION=$(lsblk -rno NAME,TYPE,SIZE "$DEVICE_PATH" | grep part | sort -k3 -h | tail -1 | awk '{print "/dev/"$1}')
+echo "Root partition: $ROOT_PARTITION"
+
+# Create mount point
+MOUNT_POINT="/mnt/bootc-root-$$"
+mkdir -p "$MOUNT_POINT"
+
+# Mount the root filesystem
+echo "Mounting bootc root filesystem..."
+if ! sudo mount "$ROOT_PARTITION" "$MOUNT_POINT"; then
+    echo -e "${RED}Error: Failed to mount $ROOT_PARTITION${NC}"
+    rmdir "$MOUNT_POINT" 2>/dev/null || true
+    exit 1
+fi
+
+# Create .ssh directory and inject authorized_keys
+echo "Injecting SSH keys into /root/.ssh/authorized_keys..."
+sudo mkdir -p "$MOUNT_POINT/root/.ssh"
+sudo cp "$SSH_KEY_ABS" "$MOUNT_POINT/root/.ssh/authorized_keys"
+sudo chmod 600 "$MOUNT_POINT/root/.ssh/authorized_keys"
+sudo chmod 700 "$MOUNT_POINT/root/.ssh"
+
+# Verify SSH keys were written
+if [ -f "$MOUNT_POINT/root/.ssh/authorized_keys" ]; then
+    echo -e "${GREEN}✅ SSH keys injected${NC}"
+    echo "SSH keys file: $MOUNT_POINT/root/.ssh/authorized_keys"
+    echo "Key count: $(sudo wc -l < "$MOUNT_POINT/root/.ssh/authorized_keys")"
+else
+    echo -e "${RED}❌ Error: Failed to inject SSH keys${NC}"
+    sudo umount "$MOUNT_POINT" 2>/dev/null || true
+    rmdir "$MOUNT_POINT" 2>/dev/null || true
+    exit 1
+fi
+
+# Unmount
+sudo umount "$MOUNT_POINT"
+rmdir "$MOUNT_POINT"
+echo -e "${GREEN}✅ SSH keys injection complete${NC}"
+
+# Step 6: Inject Registry Credentials (if provided)
 if [ -n "$ORG_ID" ] && [ -n "$USERNAME" ] && [ -n "$TOKEN" ]; then
     echo ""
     echo "=== Step 5: Injecting Registry Credentials ==="
@@ -273,9 +292,9 @@ else
     echo "  ./scripts/inject-registry-credentials.sh <device> <org-id> <username> <token>"
 fi
 
-# Step 6: Detach Volume
+# Step 7: Detach Volume
 echo ""
-echo "=== Step 6: Detaching Volume ==="
+echo "=== Step 7: Detaching Volume ==="
 aws ec2 detach-volume \
     --region "$REGION" \
     --volume-id "$VOLUME_ID"
@@ -283,9 +302,9 @@ aws ec2 detach-volume \
 aws ec2 wait volume-available --volume-ids "$VOLUME_ID" --region "$REGION"
 echo -e "${GREEN}✅ Volume detached${NC}"
 
-# Step 7: Create Snapshot
+# Step 8: Create Snapshot
 echo ""
-echo "=== Step 7: Creating Snapshot ==="
+echo "=== Step 8: Creating Snapshot ==="
 SNAPSHOT_NAME="rhoim-bootc-ami-snapshot-${TIMESTAMP}"
 SNAPSHOT_DESCRIPTION="RHOIM vLLM Bootc Image with NVIDIA drivers ${TIMESTAMP}"
 
