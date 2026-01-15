@@ -118,7 +118,7 @@ RUN --mount=type=secret,id=rhsm,target=/tmp/rhsm.conf \
     echo "=== Installing NVIDIA GPU Drivers ===" && \
     echo "Kernel version: ${KERNEL_VERSION}" && \
     echo "Installing build dependencies..." && \
-    dnf -y install gcc make && \
+    dnf -y install gcc make patch elfutils-libelf-devel && \
     echo "Installing kernel development packages..." && \
     dnf -y install kernel-devel-${KERNEL_VERSION} 2>/dev/null || \
     dnf -y install kernel-devel kernel-headers && \
