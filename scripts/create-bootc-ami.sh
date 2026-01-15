@@ -190,16 +190,23 @@ if [ ! -f "$SSH_KEY_ABS" ]; then
     exit 1
 fi
 
-# Create a temporary file with the SSH keys content to ensure it's accessible
-TMP_SSH_KEYS=$(mktemp)
+# Create a temporary file with the SSH keys content in /tmp with world-readable permissions
+# This ensures it's accessible when mounted into the container
+TMP_SSH_KEYS="/tmp/bootc-ssh-keys-$$"
 cp "$SSH_KEY_ABS" "$TMP_SSH_KEYS"
 chmod 644 "$TMP_SSH_KEYS"
 
 # Cleanup function
 cleanup_ssh_keys() {
-    rm -f "$TMP_SSH_KEYS"
+    sudo rm -f "$TMP_SSH_KEYS"
 }
 trap cleanup_ssh_keys EXIT
+
+# Verify the temp file exists and is readable
+if [ ! -r "$TMP_SSH_KEYS" ]; then
+    echo -e "${RED}Error: Failed to create temporary SSH keys file${NC}"
+    exit 1
+fi
 
 sudo podman run --rm --privileged --pid=host \
     --device-cgroup-rule='b *:* rmw' \
