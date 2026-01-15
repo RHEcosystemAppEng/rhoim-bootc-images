@@ -139,13 +139,16 @@ sleep 10
 # Step 3: Find the Attached Device
 echo ""
 echo "=== Step 3: Finding Attached Device ==="
-DEVICE=$(lsblk -rno NAME,TYPE | grep -E '^nvme[0-9]+n1$' | grep -v nvme0n1 | head -1)
+# Extract only NAME column and filter for nvme devices (excluding root device)
+DEVICE=$(lsblk -rno NAME,TYPE | awk '$2=="disk" && $1~/^nvme[0-9]+n1$/ && $1!="nvme0n1" {print $1}' | head -1)
 if [ -z "$DEVICE" ]; then
-    DEVICE=$(lsblk -rno NAME,TYPE | grep -E '^xvdf$' | head -1)
+    # Fallback to xvdf for older instance types
+    DEVICE=$(lsblk -rno NAME,TYPE | awk '$2=="disk" && $1=="xvdf" {print $1}' | head -1)
 fi
 
 if [ -z "$DEVICE" ]; then
     echo -e "${RED}Error: Could not find attached device${NC}"
+    echo "Available block devices:"
     lsblk
     exit 1
 fi
