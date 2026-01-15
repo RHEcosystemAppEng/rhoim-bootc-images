@@ -176,13 +176,21 @@ echo "This will install the bootc image to $DEVICE_PATH"
 echo "SSH keys from $SSH_KEY_FILE will be included"
 echo ""
 
+# Convert localhost image name to containers-storage format for bootc
+# bootc needs containers-storage: prefix to access local podman images
+if [[ "$IMAGE_NAME" == localhost/* ]]; then
+    SOURCE_IMGREF="containers-storage:${IMAGE_NAME}"
+else
+    SOURCE_IMGREF="$IMAGE_NAME"
+fi
+
 sudo bootc install to-disk \
     --wipe \
     --filesystem ext4 \
     --karg console=ttyS0,115200n8 \
     --karg root=LABEL=root \
     --root-ssh-authorized-keys "$SSH_KEY_FILE" \
-    --source-imgref "$IMAGE_NAME" \
+    --source-imgref "$SOURCE_IMGREF" \
     "$DEVICE_PATH"
 
 echo -e "${GREEN}✅ Bootc image installed${NC}"
