@@ -325,9 +325,9 @@ aws ec2 wait snapshot-completed \
     --snapshot-ids "$SNAPSHOT_ID"
 echo -e "${GREEN}✅ Snapshot created${NC}"
 
-# Step 8: Create AMI with UEFI Boot Mode (CRITICAL)
+# Step 9: Create AMI with UEFI Boot Mode (CRITICAL)
 echo ""
-echo "=== Step 8: Creating AMI with UEFI Boot Mode ==="
+echo "=== Step 9: Creating AMI with UEFI Boot Mode ==="
 echo -e "${YELLOW}⚠️  CRITICAL: Setting --boot-mode uefi (required for bootc images)${NC}"
 
 AMI_NAME="rhoim-vllm-bootc-nvidia-${TIMESTAMP}"
