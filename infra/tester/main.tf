@@ -20,10 +20,16 @@ variable "aws_region" {
   default     = "us-east-1"
 }
 
-variable "instance_name" {
-  description = "Name tag for the EC2 instance"
+variable "resource_prefix" {
+  description = "Prefix for all resource names (e.g., 'dev-rhoim-tester') - used for easy filtering and cleanup"
   type        = string
-  default     = "rhoim-host"
+  default     = "rhoim-tester"
+}
+
+variable "instance_name" {
+  description = "Name tag for the EC2 instance (will use resource_prefix if not set)"
+  type        = string
+  default     = ""
 }
 
 variable "key_name" {
@@ -59,6 +65,16 @@ variable "root_volume_size" {
   default     = 200
 }
 
+# Local values for resource naming
+locals {
+  instance_name = var.instance_name != "" ? var.instance_name : var.resource_prefix
+  common_tags = {
+    Project     = "rhoim-bootc"
+    ManagedBy   = "opentofu"
+    ResourcePrefix = var.resource_prefix
+  }
+}
+
 # Get common networking info
 module "network" {
   source = "../modules/aws-network"
@@ -66,7 +82,7 @@ module "network" {
 
 # Security group for the GPU host instance
 resource "aws_security_group" "gpu_host" {
-  name        = "${var.instance_name}-sg"
+  name        = "${local.instance_name}-sg"
   description = "Security group for RHEL 9.6 GPU host instance"
   vpc_id      = module.network.vpc_id
 
@@ -96,9 +112,9 @@ resource "aws_security_group" "gpu_host" {
     cidr_blocks = ["0.0.0.0/0"]
   }
 
-  tags = {
-    Name = "${var.instance_name}-sg"
-  }
+  tags = merge({
+    Name = "${local.instance_name}-sg"
+  }, local.common_tags)
 }
 
 # GPU host instance
@@ -121,9 +137,14 @@ resource "aws_instance" "gpu_host" {
 
   user_data_base64 = base64encode(local.user_data)
 
-  tags = {
-    Name = var.instance_name
-  }
+  tags = merge({
+    Name = local.instance_name
+  }, local.common_tags)
+
+  # Tag the EBS volume with the same tags for easy filtering
+  volume_tags = merge({
+    Name = "${local.instance_name}-root"
+  }, local.common_tags)
 }
 
 locals {

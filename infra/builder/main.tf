@@ -20,10 +20,16 @@ variable "aws_region" {
   default     = "us-east-1"
 }
 
-variable "instance_name" {
-  description = "Name tag for the EC2 instance"
+variable "resource_prefix" {
+  description = "Prefix for all resource names (e.g., 'dev-rhoim-builder') - used for easy filtering and cleanup"
   type        = string
   default     = "rhoim-builder"
+}
+
+variable "instance_name" {
+  description = "Name tag for the EC2 instance (will use resource_prefix if not set)"
+  type        = string
+  default     = ""
 }
 
 variable "key_name" {
@@ -97,6 +103,16 @@ variable "quay_token" {
   sensitive   = true
 }
 
+# Local values for resource naming
+locals {
+  instance_name = var.instance_name != "" ? var.instance_name : var.resource_prefix
+  common_tags = {
+    Project     = "rhoim-bootc"
+    ManagedBy   = "opentofu"
+    ResourcePrefix = var.resource_prefix
+  }
+}
+
 # Get common networking info
 module "network" {
   source = "../modules/aws-network"
@@ -104,7 +120,7 @@ module "network" {
 
 # Security group for the builder instance
 resource "aws_security_group" "builder" {
-  name        = "${var.instance_name}-sg"
+  name        = "${local.instance_name}-sg"
   description = "Security group for RHEL image builder instance"
   vpc_id      = module.network.vpc_id
 
@@ -125,9 +141,9 @@ resource "aws_security_group" "builder" {
     cidr_blocks = ["0.0.0.0/0"]
   }
 
-  tags = {
-    Name = "${var.instance_name}-sg"
-  }
+  tags = merge({
+    Name = "${local.instance_name}-sg"
+  }, local.common_tags)
 }
 
 # Builder instance
@@ -150,15 +166,20 @@ resource "aws_instance" "builder" {
 
   user_data_base64 = base64encode(local.user_data)
 
-  tags = {
-    Name = var.instance_name
-  }
+  tags = merge({
+    Name = local.instance_name
+  }, local.common_tags)
+
+  # Tag the EBS volume with the same tags for easy filtering
+  volume_tags = merge({
+    Name = "${local.instance_name}-root"
+  }, local.common_tags)
 }
 
 locals {
   user_data = <<-EOF
     #!/bin/bash
-    set -ex
+    set -e  # Exit on error, but we'll handle errors gracefully
 
     # Log output to file for debugging
     exec > >(tee /var/log/user-data.log) 2>&1
@@ -179,29 +200,100 @@ locals {
 
     # Step 3: Register with Red Hat subscription manager
     echo "=== Registering with Red Hat subscription manager ==="
-    subscription-manager register --activationkey="${var.rhsm_activation_key}" --org="${var.rhsm_org_id}"
+    
+    # Wait for network and SSL/TLS stack to be fully ready
+    echo "Waiting for network stack to be fully initialized..."
+    for i in {1..30}; do
+      # Test DNS resolution
+      if getent hosts subscription.rhsm.redhat.com >/dev/null 2>&1; then
+        # Test HTTPS connectivity (ignore cert errors, just check connection)
+        if timeout 5 curl -k -s -o /dev/null -w "%%{http_code}" https://subscription.rhsm.redhat.com 2>/dev/null | grep -qE "^[0-9]"; then
+          echo "Network and SSL stack ready"
+          break
+        fi
+      fi
+      if [ $i -eq 30 ]; then
+        echo "[WARNING] Network readiness check timeout - proceeding anyway"
+      fi
+      sleep 2
+    done
+    
+    # Additional delay to ensure SSL/TLS libraries are fully loaded
+    echo "Waiting for SSL/TLS stack to stabilize..."
+    sleep 5
+    
+    # Attempt registration with retry logic
+    RHSM_SUCCESS=false
+    for attempt in {1..3}; do
+      echo "Registration attempt $attempt of 3..."
+      if subscription-manager register --activationkey="${var.rhsm_activation_key}" --org="${var.rhsm_org_id}" 2>&1; then
+        RHSM_SUCCESS=true
+        echo "[SUCCESS] Red Hat subscription manager registration completed"
+        break
+      else
+        EXIT_CODE=$?
+        echo "[WARNING] Registration attempt $attempt failed (exit code: $EXIT_CODE)"
+        if [ $attempt -lt 3 ]; then
+          echo "Waiting 15 seconds before retry..."
+          sleep 15
+        fi
+      fi
+    done
+    
+    if [ "$RHSM_SUCCESS" = "false" ]; then
+      echo "[WARNING] Red Hat subscription manager registration failed after 3 attempts"
+      echo "[WARNING] Continuing setup - you can register manually later with:"
+      echo "  sudo subscription-manager register --activationkey=${var.rhsm_activation_key} --org=${var.rhsm_org_id}"
+    fi
 
-    # Step 4: Enable CDN repos for bootc-image-builder
-    # RHUI repos don't work in containers, so we need CDN repos enabled
-    echo "=== Enabling CDN repos for bootc-image-builder ==="
-    subscription-manager config --rhsm.manage_repos=1
-    subscription-manager repos \
-      --enable=rhel-9-for-x86_64-baseos-rpms \
-      --enable=rhel-9-for-x86_64-appstream-rpms
+    # Step 4: Enable CDN repos for bootc-image-builder (only if registration succeeded)
+    if [ "$RHSM_SUCCESS" = "true" ]; then
+      echo "=== Enabling CDN repos for bootc-image-builder ==="
+      subscription-manager config --rhsm.manage_repos=1
+      subscription-manager repos \
+        --enable=rhel-9-for-x86_64-baseos-rpms \
+        --enable=rhel-9-for-x86_64-appstream-rpms
+    else
+      echo "[SKIPPED] CDN repos - RHSM registration failed, using RHUI repos"
+    fi
 
     # Step 5: Login to Red Hat registry
     echo "=== Logging into Red Hat registry ==="
-    echo "${var.redhat_registry_token}" | podman login --username "${var.redhat_registry_username}" --password-stdin registry.redhat.io
+    if echo "${var.redhat_registry_token}" | podman login --username "${var.redhat_registry_username}" --password-stdin registry.redhat.io 2>&1; then
+      echo "[SUCCESS] Red Hat registry login completed"
+      REDHAT_REGISTRY_SUCCESS=true
+    else
+      echo "[WARNING] Red Hat registry login failed - continuing setup"
+      echo "[WARNING] You can login manually later with:"
+      echo "  echo '${var.redhat_registry_token}' | podman login --username '${var.redhat_registry_username}' --password-stdin registry.redhat.io"
+      REDHAT_REGISTRY_SUCCESS=false
+    fi
 
     # Step 6: Login to Quay.io registry
     echo "=== Logging into Quay.io registry ==="
-    echo "${var.quay_token}" | podman login --username "${var.quay_username}" --password-stdin quay.io
+    if echo "${var.quay_token}" | podman login --username "${var.quay_username}" --password-stdin quay.io 2>&1; then
+      echo "[SUCCESS] Quay.io registry login completed"
+      QUAY_REGISTRY_SUCCESS=true
+    else
+      echo "[WARNING] Quay.io registry login failed - continuing setup"
+      echo "[WARNING] You can login manually later with:"
+      echo "  echo '${var.quay_token}' | podman login --username '${var.quay_username}' --password-stdin quay.io"
+      QUAY_REGISTRY_SUCCESS=false
+    fi
 
-    # Step 7: Copy registry credentials to ec2-user
+    # Step 7: Copy registry credentials to ec2-user (only if at least one login succeeded)
     echo "=== Setting up registry credentials for ec2-user ==="
-    mkdir -p /home/ec2-user/.config/containers
-    cp /run/containers/0/auth.json /home/ec2-user/.config/containers/auth.json
-    chown -R ec2-user:ec2-user /home/ec2-user/.config
+    if [ "$REDHAT_REGISTRY_SUCCESS" = "true" ] || [ "$QUAY_REGISTRY_SUCCESS" = "true" ]; then
+      if mkdir -p /home/ec2-user/.config/containers && \
+         cp /run/containers/0/auth.json /home/ec2-user/.config/containers/auth.json 2>/dev/null && \
+         chown -R ec2-user:ec2-user /home/ec2-user/.config; then
+        echo "[SUCCESS] Registry credentials copied"
+      else
+        echo "[WARNING] Failed to copy registry credentials"
+      fi
+    else
+      echo "[SKIPPED] No registry credentials to copy (both logins failed)"
+    fi
 
     # Step 8: Install bootc and image building tools
     echo "=== Installing bootc and image building tools ==="
