@@ -217,7 +217,8 @@ SSH_KEY_CONTENT=$(cat "$SSH_KEY_ABS")
 # Run bootc install with SSH keys
 # Pass SSH keys via environment variable and write to file in container
 # This ensures the file exists in the container's filesystem when bootc reads it
-sudo podman run --rm --privileged --pid=host \
+# Use sudo -E to preserve environment variables, or pass directly to podman
+sudo -E podman run --rm --privileged --pid=host \
     --device-cgroup-rule='b *:* rmw' \
     -v /dev:/dev \
     -e SSH_KEYS_CONTENT="$SSH_KEY_CONTENT" \
