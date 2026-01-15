@@ -210,20 +210,15 @@ fi
 
 echo "SSH keys file prepared: $TMP_SSH_KEYS"
 
-# Read SSH key content to pass via environment variable
-# This ensures the content is available when bootc runs
-SSH_KEY_CONTENT=$(cat "$SSH_KEY_ABS")
-
 # Run bootc install with SSH keys
-# Pass SSH keys via environment variable and write to file in container
-# This ensures the file exists in the container's filesystem when bootc reads it
-# Use sudo -E to preserve environment variables, or pass directly to podman
-sudo -E podman run --rm --privileged --pid=host \
+# Mount the SSH keys file and copy it to /tmp/ssh_keys inside the container
+# Ensure /tmp exists and the file is accessible when bootc reads it
+sudo podman run --rm --privileged --pid=host \
     --device-cgroup-rule='b *:* rmw' \
     -v /dev:/dev \
-    -e SSH_KEYS_CONTENT="$SSH_KEY_CONTENT" \
+    -v "$TMP_SSH_KEYS:/tmp/ssh_keys_source:ro,Z" \
     "$IMAGE_NAME" \
-    sh -c "echo \"\$SSH_KEYS_CONTENT\" > /tmp/ssh_keys && chmod 644 /tmp/ssh_keys && bootc install to-disk --wipe --filesystem ext4 --karg console=ttyS0,115200n8 --karg root=LABEL=root --root-ssh-authorized-keys /tmp/ssh_keys $DEVICE_PATH"
+    sh -c "mkdir -p /tmp && cp /tmp/ssh_keys_source /tmp/ssh_keys && chmod 644 /tmp/ssh_keys && ls -la /tmp/ssh_keys && cat /tmp/ssh_keys && bootc install to-disk --wipe --filesystem ext4 --karg console=ttyS0,115200n8 --karg root=LABEL=root --root-ssh-authorized-keys /tmp/ssh_keys $DEVICE_PATH"
 
 echo -e "${GREEN}✅ Bootc image installed${NC}"
 
