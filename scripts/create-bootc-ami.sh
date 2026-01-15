@@ -139,8 +139,9 @@ sleep 10
 # Step 3: Find the Attached Device
 echo ""
 echo "=== Step 3: Finding Attached Device ==="
-# Extract only NAME column and filter for nvme devices (excluding root device)
-DEVICE=$(lsblk -rno NAME,TYPE | awk '$2=="disk" && $1~/^nvme[0-9]+n1$/ && $1!="nvme0n1" {print $1}' | head -1)
+# Find the largest unpartitioned nvme disk (excluding root device nvme0n1)
+# This ensures we get the newly attached volume, not an existing one
+DEVICE=$(lsblk -rno NAME,TYPE,SIZE | awk '$2=="disk" && $1~/^nvme[0-9]+n1$/ && $1!="nvme0n1" {print $1, $3}' | sort -k2 -h | tail -1 | awk '{print $1}')
 if [ -z "$DEVICE" ]; then
     # Fallback to xvdf for older instance types
     DEVICE=$(lsblk -rno NAME,TYPE | awk '$2=="disk" && $1=="xvdf" {print $1}' | head -1)
