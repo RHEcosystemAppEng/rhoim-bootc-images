@@ -178,10 +178,22 @@ echo ""
 
 # Run bootc install from inside the container (required per bootc docs)
 # The container must be run with --privileged, --pid=host, and device access to see block devices
+# Expand SSH_KEY_FILE to absolute path to ensure it works with sudo
+SSH_KEY_ABS=$(readlink -f "$SSH_KEY_FILE" || echo "$SSH_KEY_FILE")
+if [[ "$SSH_KEY_ABS" != /* ]]; then
+    SSH_KEY_ABS="$HOME/$SSH_KEY_ABS"
+fi
+
+# Verify the file exists before mounting
+if [ ! -f "$SSH_KEY_ABS" ]; then
+    echo -e "${RED}Error: SSH key file not found: $SSH_KEY_ABS${NC}"
+    exit 1
+fi
+
 sudo podman run --rm --privileged --pid=host \
     --device-cgroup-rule='b *:* rmw' \
     -v /dev:/dev \
-    -v "$SSH_KEY_FILE:/tmp/ssh_keys:ro" \
+    -v "$SSH_KEY_ABS:/tmp/ssh_keys:ro,Z" \
     "$IMAGE_NAME" \
     bootc install to-disk \
     --wipe \
