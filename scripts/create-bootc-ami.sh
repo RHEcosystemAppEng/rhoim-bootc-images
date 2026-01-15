@@ -182,7 +182,7 @@ sudo bootc install to-disk \
     --karg console=ttyS0,115200n8 \
     --karg root=LABEL=root \
     --root-ssh-authorized-keys "$SSH_KEY_FILE" \
-    "$IMAGE_NAME" \
+    --source-imgref "$IMAGE_NAME" \
     "$DEVICE_PATH"
 
 echo -e "${GREEN}✅ Bootc image installed${NC}"
