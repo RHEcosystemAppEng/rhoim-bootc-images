@@ -122,6 +122,10 @@ RUN --mount=type=secret,id=rhsm,target=/tmp/rhsm.conf \
     echo "Installing kernel development packages..." && \
     dnf -y install kernel-devel-${KERNEL_VERSION} 2>/dev/null || \
     dnf -y install kernel-devel kernel-headers && \
+    echo "Installing EPEL for DKMS..." && \
+    dnf -y install https://dl.fedoraproject.org/pub/epel/epel-release-latest-9.noarch.rpm && \
+    echo "Installing DKMS..." && \
+    dnf -y install dkms && \
     echo "Installing NVIDIA driver packages from CUDA repository..." && \
     dnf -y install nvidia-driver nvidia-driver-cuda && \
     echo "✅ NVIDIA drivers installed successfully" && \
