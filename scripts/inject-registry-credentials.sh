@@ -40,6 +40,10 @@ echo "=== Creating /etc/sysconfig directory ==="
 mkdir -p "$MOUNT_POINT/etc/sysconfig"
 
 echo "=== Creating /etc/sysconfig/rhoim with registry credentials ==="
+# Remove any existing file to ensure clean write
+rm -f "$MOUNT_POINT/etc/sysconfig/rhoim"
+
+# Create the file with actual credentials (not comments)
 cat > "$MOUNT_POINT/etc/sysconfig/rhoim" <<EOF
 # RHOIM Environment Variables for bootc Model Serving
 
@@ -62,6 +66,13 @@ RHSM_ORG_ID="${ORG_ID}"
 REDHAT_REGISTRY_USERNAME="${ORG_ID}|${USERNAME}"
 REDHAT_REGISTRY_TOKEN="${TOKEN}"
 EOF
+
+# Verify the file was written correctly
+if ! grep -q "^REDHAT_REGISTRY_USERNAME=" "$MOUNT_POINT/etc/sysconfig/rhoim"; then
+    echo "❌ Error: Credentials were not written correctly"
+    umount "$MOUNT_POINT"
+    exit 1
+fi
 
 echo "=== Setting correct permissions ==="
 chmod 600 "$MOUNT_POINT/etc/sysconfig/rhoim"

@@ -35,11 +35,14 @@ API_KEYS="devkey1,devkey2"
 # 
 # Username format: Red Hat registry requires "org_id|username" format
 # Option 1: Provide username in correct format (recommended)
-#   REDHAT_REGISTRY_USERNAME="11009103|your-username"
+#   REDHAT_REGISTRY_USERNAME="your-org-id|your-username"
 # Option 2: Provide org_id separately (script will construct the format)
-#   REDHAT_REGISTRY_ORG_ID="11009103"
+#   RHSM_ORG_ID="your-org-id"  # Note: Variable name is RHSM_ORG_ID (not REDHAT_REGISTRY_ORG_ID)
 #   REDHAT_REGISTRY_USERNAME="your-username"
 # Option 3: Just username (script will try to detect org_id from subscription-manager)
 #   REDHAT_REGISTRY_USERNAME="your-username"
-# REDHAT_REGISTRY_USERNAME="your-redhat-username"
+# 
+# Uncomment and set these values:
+# RHSM_ORG_ID="your-org-id"
+# REDHAT_REGISTRY_USERNAME="your-org-id|your-username"  # Or just "your-username" if RHSM_ORG_ID is set
 # REDHAT_REGISTRY_TOKEN="your-redhat-token"

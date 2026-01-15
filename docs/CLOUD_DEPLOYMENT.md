@@ -270,6 +270,37 @@ az storage blob upload \
 
 ## AWS Deployment
 
+### ⚠️ Critical: UEFI Boot Mode Requirement
+
+**Bootc images REQUIRE UEFI boot mode. This is a critical requirement that must be set when creating the AMI.**
+
+**The Problem:**
+- Bootc/ostree images use UEFI boot firmware
+- AWS EC2 defaults to **Legacy BIOS** boot mode if the AMI doesn't specify a boot mode
+- Legacy BIOS boot will **fail** with bootc images (kernel won't boot, console output will be empty)
+
+**The Solution:**
+- **Always specify `--boot-mode uefi`** when creating the AMI using `aws ec2 register-image`
+- Without this, instances will fail to boot even though the image structure is correct
+
+**How to Verify:**
+```bash
+# Check if AMI has UEFI boot mode
+aws ec2 describe-images --image-ids <AMI-ID> --query 'Images[0].BootMode' --output text
+# Should output: uefi
+
+# Check if instance is using UEFI
+aws ec2 describe-instances --instance-ids <INSTANCE-ID> --query 'Reservations[0].Instances[0].BootMode' --output text
+# Should output: uefi
+```
+
+**Symptoms of Missing UEFI Boot Mode:**
+- Instance status: "initializing" (never reaches "ok")
+- Console output: 0-47 bytes (essentially empty)
+- System status: "ok" (AWS can reach instance)
+- Instance status: "initializing" (instance can't reach AWS metadata service)
+- SSH: Not accessible
+
 ### ⚠️ Important: AWS AMI Import Limitations
 
 **AWS has strict validation rules for imported images that often cause issues with bootc images:**
@@ -279,9 +310,9 @@ az storage blob upload \
 3. **Root Device Name**: Must match AWS conventions (`/dev/sda1`, `/dev/xvda`, etc.)
 4. **File System Support**: Only ext4, xfs, and btrfs are fully supported
 5. **Image Size**: Must meet minimum size requirements (typically 8GB+)
-6. **UEFI vs Legacy Boot**: AWS validation may reject UEFI-only images in some cases
+6. **UEFI Boot Mode**: **REQUIRED** - Must be explicitly set when creating AMI (see above)
 
-**Result**: Direct AMI import from raw disk images often fails AWS validation, especially with bootc/ostree-based images.
+**Result**: Direct AMI import from raw disk images often fails AWS validation, especially with bootc/ostree-based images. Use the direct EBS installation method below for better reliability.
 
 ### Recommended Approach: Direct EBS Installation (Most Reliable)
 
@@ -312,11 +343,17 @@ Instead of importing a disk image, install the bootc image directly to an EBS vo
 2. **Create and Attach EBS Volume**
 
    ```bash
-   # Create a 20GB EBS volume (adjust size as needed)
+   # Create a 50GB EBS volume (20GB is insufficient for vLLM container image)
+   # The vLLM container image is large (~10-15GB), and you need space for:
+   # - Bootc OS: ~2-3GB
+   # - vLLM container image: ~10-15GB
+   # - Container layers and temporary files: ~5-10GB
+   # - Buffer for operations: ~5GB
+   # Minimum recommended: 50GB
    VOLUME_ID=$(aws ec2 create-volume \
      --region us-east-1 \
      --availability-zone us-east-1a \
-     --size 20 \
+     --size 50 \
      --volume-type gp3 \
      --query 'VolumeId' --output text)
 
@@ -345,10 +382,12 @@ Instead of importing a disk image, install the bootc image directly to an EBS vo
 
    ```bash
    # Install bootc image directly to the volume
-   sudo bootc install \
-     --root-fs-type ext4 \
+   sudo bootc install to-disk \
+     --wipe \
+     --filesystem ext4 \
      --karg console=ttyS0,115200n8 \
      --karg root=LABEL=root \
+     --root-ssh-authorized-keys ~/.ssh/authorized_keys \
      localhost/rhoim-vllm-bootc:latest \
      /dev/nvme1n1  # Use the device from lsblk
 
@@ -357,7 +396,40 @@ Instead of importing a disk image, install the bootc image directly to an EBS vo
    sudo lsblk -f /dev/nvme1n1
    ```
 
-5. **Detach Volume and Create Snapshot**
+5. **Inject Registry Credentials (Required for vLLM container pull)**
+
+   **Important Notes:**
+   - Red Hat registry requires username format: `org_id|username`
+   - Credentials are stored in `/etc/sysconfig/rhoim` and used by `podman-registry-login.service`
+   - Podman uses explicit `--authfile /root/.config/containers/auth.json` for credential persistence
+   
+   ```bash
+   # Find the root partition (usually the largest partition)
+   ROOT_PARTITION=$(lsblk -rno NAME,TYPE /dev/nvme1n1 | grep part | tail -1 | awk '{print "/dev/"$1}')
+   # Or manually: ROOT_PARTITION=/dev/nvme1n1p3
+   
+   # Inject credentials using the helper script
+   # The script automatically formats username as "org_id|username"
+   # Replace with your actual Red Hat credentials
+   sudo ./scripts/inject-registry-credentials.sh \
+     "$ROOT_PARTITION" \
+     "your-org-id" \
+     "your-redhat-username" \
+     "your-redhat-token"
+   
+   # Or manually create the file (username must be in "org_id|username" format):
+   # sudo mkdir -p /mnt/bootc-root/etc/sysconfig
+   # sudo mount "$ROOT_PARTITION" /mnt/bootc-root
+   # sudo tee /mnt/bootc-root/etc/sysconfig/rhoim > /dev/null <<EOF
+   # RHSM_ORG_ID="your-org-id"
+   # REDHAT_REGISTRY_USERNAME="your-org-id|your-username"  # Must include org_id
+   # REDHAT_REGISTRY_TOKEN="your-token"
+   # EOF
+   # sudo chmod 600 /mnt/bootc-root/etc/sysconfig/rhoim
+   # sudo umount /mnt/bootc-root
+   ```
+
+6. **Detach Volume and Create Snapshot**
 
    ```bash
    # Detach volume
@@ -384,17 +456,36 @@ Instead of importing a disk image, install the bootc image directly to an EBS vo
 6. **Create AMI from Snapshot**
 
    ```bash
-   # Create AMI from snapshot
+   # Create AMI from snapshot with UEFI boot mode (REQUIRED for bootc)
+   # ⚠️ CRITICAL: --boot-mode uefi must be specified, otherwise AWS defaults to Legacy BIOS
+   # Legacy BIOS will cause boot failure with bootc images (empty console output, instance won't boot)
    AMI_ID=$(aws ec2 register-image \
      --region us-east-1 \
      --name rhoim-vllm-bootc-$(date +%Y%m%d) \
      --root-device-name /dev/sda1 \
      --virtualization-type hvm \
      --architecture x86_64 \
+     --boot-mode uefi \
      --block-device-mappings "[{\"DeviceName\":\"/dev/sda1\",\"Ebs\":{\"SnapshotId\":\"$SNAPSHOT_ID\",\"VolumeType\":\"gp3\",\"DeleteOnTermination\":true}}]" \
      --query 'ImageId' --output text)
 
    echo "AMI created: $AMI_ID"
+   
+   # Verify boot mode was set correctly
+   BOOT_MODE=$(aws ec2 describe-images --region us-east-1 --image-ids $AMI_ID --query 'Images[0].BootMode' --output text)
+   if [ "$BOOT_MODE" != "uefi" ]; then
+     echo "⚠️ WARNING: Boot mode is not UEFI: $BOOT_MODE"
+     echo "   This will cause boot failure. Recreate the AMI with --boot-mode uefi"
+     exit 1
+   fi
+   echo "✅ Boot mode verified: $BOOT_MODE"
+   
+   # Enable ENA support (required for enhanced networking on certain instance types like g4dn.xlarge)
+   aws ec2 modify-image-attribute \
+     --region us-east-1 \
+     --image-id $AMI_ID \
+     --ena-support
+   echo "✅ ENA support enabled"
    ```
 
 7. **Launch EC2 Instance from AMI**
@@ -455,10 +546,69 @@ If you want to try the S3 import method despite validation issues:
 
 ### Troubleshooting AWS Deployment
 
+- **Instance doesn't boot / Console output is empty (0-47 bytes)**:
+  - **Most common cause**: AMI was created without `--boot-mode uefi`
+  - **Solution**: Recreate the AMI with `--boot-mode uefi` explicitly set
+  - **Verify**: `aws ec2 describe-images --image-ids <AMI-ID> --query 'Images[0].BootMode'` should return `uefi`
+  - **Symptoms**: System status "ok" but instance status stuck at "initializing", no console output, SSH not accessible
+
 - **AMI validation fails**: Use the direct EBS installation method instead
-- **Instance doesn't boot**: Check EC2 console logs, verify UEFI boot support
-- **Root device not found**: Ensure `--root-device-name` matches the partition layout
+
+- **Root device not found**: Ensure `--root-device-name` matches the partition layout (usually `/dev/sda1`)
+
 - **Snapshot import fails**: Check S3 permissions and file format (must be uncompressed raw)
+
+- **Instance status check fails**: 
+  - If "Instance reachability check" fails, verify network configuration
+  - If console output is empty, check boot mode (must be UEFI)
+
+- **"no space left on device" during image pull**:
+  - **Cause**: EBS volume is too small (20GB is insufficient for vLLM container image)
+  - **Solution**: Resize EBS volume to at least 50GB:
+    ```bash
+    # Resize EBS volume
+    aws ec2 modify-volume --volume-id <VOLUME-ID> --size 50
+    
+    # On the instance, resize partition and filesystem
+    growpart /dev/nvme0n1 3  # Adjust partition number as needed
+    resize2fs /dev/nvme0n1p3  # Adjust partition as needed
+    ```
+  - **Prevention**: Create EBS volumes with at least 50GB from the start
+
+- **Registry authentication fails ("invalid username/password")**:
+  - **Cause**: Red Hat registry requires username format `org_id|username`, not just `username`
+  - **Solution**: Ensure `/etc/sysconfig/rhoim` has correct format:
+    ```bash
+    # Option 1: Set username in correct format
+    REDHAT_REGISTRY_USERNAME="your-org-id|your-username"
+    
+    # Option 2: Set org_id separately (script will construct format)
+    RHSM_ORG_ID="your-org-id"
+    REDHAT_REGISTRY_USERNAME="your-username"
+    ```
+  - **Verify**: Check that `podman-registry-login.service` runs successfully:
+    ```bash
+    systemctl status podman-registry-login.service
+    journalctl -u podman-registry-login.service
+    ```
+  - **Note**: Podman uses explicit `--authfile /root/.config/containers/auth.json` for credential persistence
+
+- **Container fails with "unresolvable CDI devices nvidia.com/gpu=all"**:
+  - **Cause**: NVIDIA drivers or CDI configuration not available (common on CPU instances)
+  - **Solution**: 
+    - For GPU instances: Ensure NVIDIA drivers are installed and `nvidia-container-setup.service` has run
+    - For CPU instances: This is expected - vLLM CUDA container requires GPU hardware
+  - **Verify NVIDIA setup**:
+    ```bash
+    # Check if NVIDIA devices exist
+    ls -la /dev/nvidia*
+    
+    # Check CDI configuration
+    ls -la /etc/cdi/nvidia.yaml
+    
+    # Check nvidia-container-setup service
+    systemctl status nvidia-container-setup.service
+    ```
 
 ## General Cloud Deployment
 
@@ -466,7 +616,10 @@ If you want to try the S3 import method despite validation issues:
 
 1. **Architecture Compatibility**: Ensure the image architecture matches the target platform (amd64 vs arm64).
 2. **Boot Requirements**: Bootc images require UEFI boot support.
-3. **Storage**: Use appropriate disk sizes (minimum 64GB recommended).
+3. **Storage**: Use appropriate disk sizes:
+   - **Minimum for vLLM**: 50GB (20GB is insufficient)
+   - **Recommended**: 64GB+ for production workloads
+   - **Why**: vLLM container image is large (~10-15GB), plus OS, layers, and temporary files
 4. **Network**: Configure networking and security groups/firewalls appropriately.
 5. **Access**: Set up SSH or console access for initial configuration.
 
