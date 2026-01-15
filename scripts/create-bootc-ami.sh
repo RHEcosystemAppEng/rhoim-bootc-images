@@ -177,8 +177,8 @@ echo "SSH keys from $SSH_KEY_FILE will be included"
 echo ""
 
 # Run bootc install from inside the container (required per bootc docs)
-# The container must be run with --privileged and device access to see block devices
-sudo podman run --rm --privileged \
+# The container must be run with --privileged, --pid=host, and device access to see block devices
+sudo podman run --rm --privileged --pid=host \
     --device-cgroup-rule='b *:* rmw' \
     -v /dev:/dev \
     -v "$SSH_KEY_FILE:/tmp/ssh_keys:ro" \
