@@ -127,6 +127,17 @@ echo -e "${GREEN}✅ Volume created${NC}"
 # Step 2: Attach Volume
 echo ""
 echo "=== Step 2: Attaching Volume to Instance ==="
+# Check if /dev/sdf is already in use and detach if needed
+EXISTING_VOLUME=$(aws ec2 describe-volumes --region "$REGION" \
+    --filters "Name=attachment.instance-id,Values=$INSTANCE_ID" "Name=attachment.device,Values=/dev/sdf" \
+    --query 'Volumes[0].VolumeId' --output text 2>/dev/null || echo "")
+
+if [ -n "$EXISTING_VOLUME" ] && [ "$EXISTING_VOLUME" != "None" ]; then
+    echo "Detaching existing volume from /dev/sdf: $EXISTING_VOLUME"
+    aws ec2 detach-volume --region "$REGION" --volume-id "$EXISTING_VOLUME" > /dev/null 2>&1
+    aws ec2 wait volume-available --region "$REGION" --volume-ids "$EXISTING_VOLUME" 2>/dev/null || true
+fi
+
 aws ec2 attach-volume \
     --region "$REGION" \
     --volume-id "$VOLUME_ID" \
