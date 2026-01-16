@@ -372,15 +372,16 @@ if [ "$BOOT_MODE" != "uefi" ]; then
 fi
 echo -e "${GREEN}✅ Boot mode verified: $BOOT_MODE${NC}"
 
-# Step 9: Enable ENA Support (required for enhanced networking)
+# Step 9: Verify ENA Support (already enabled during AMI creation)
 echo ""
-echo "=== Step 9: Enabling ENA Support ==="
-echo "ENA support is required for enhanced networking on certain instance types (e.g., g4dn.xlarge)"
-aws ec2 modify-image-attribute \
-    --region "$REGION" \
-    --image-id "$AMI_ID" \
-    --ena-support
-echo -e "${GREEN}✅ ENA support enabled${NC}"
+echo "=== Step 9: Verifying ENA Support ==="
+echo "ENA support was enabled during AMI creation (required for enhanced networking on certain instance types)"
+ENA_SUPPORT=$(aws ec2 describe-images --region "$REGION" --image-ids "$AMI_ID" --query 'Images[0].EnaSupport' --output text)
+if [ "$ENA_SUPPORT" = "true" ]; then
+    echo -e "${GREEN}✅ ENA support verified: enabled${NC}"
+else
+    echo -e "${YELLOW}⚠️  Warning: ENA support is not enabled${NC}"
+fi
 
 # Summary
 echo ""
