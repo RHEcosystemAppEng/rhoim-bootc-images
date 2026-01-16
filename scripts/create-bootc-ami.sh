@@ -339,6 +339,7 @@ AMI_ID=$(aws ec2 register-image \
     --virtualization-type hvm \
     --architecture x86_64 \
     --boot-mode uefi \
+    --ena-support \
     --block-device-mappings "[{\"DeviceName\":\"/dev/sda1\",\"Ebs\":{\"SnapshotId\":\"$SNAPSHOT_ID\",\"VolumeType\":\"gp3\",\"DeleteOnTermination\":true}}]" \
     --query 'ImageId' --output text)
 
