@@ -49,9 +49,10 @@ cat > "$MOUNT_POINT/etc/tmpfiles.d/rhoim-credentials.conf" <<EOF
 f /etc/sysconfig/rhoim 0600 root root -
 EOF
 
-# Write the credentials content to a file that tmpfiles will use
-# We'll store the content in /var/lib/rhoim and have tmpfiles copy it
+# Write the credentials content to a file that will persist
+# Store in /var/lib/rhoim which is writable and persistent in bootc/ostree
 mkdir -p "$MOUNT_POINT/var/lib/rhoim"
+# Ensure the directory will exist at boot (tmpfiles.d will create it if needed)
 cat > "$MOUNT_POINT/var/lib/rhoim/rhoim.template" <<EOF
 # RHOIM Environment Variables for bootc Model Serving
 
@@ -76,9 +77,15 @@ REDHAT_REGISTRY_TOKEN="${TOKEN}"
 EOF
 
 # Update tmpfiles.d to copy from template
+# Use 'C' directive which copies from source to destination
+# The source file must exist, so we ensure /var/lib/rhoim/rhoim.template is created
+# Also ensure the directory exists at boot
 cat > "$MOUNT_POINT/etc/tmpfiles.d/rhoim-credentials.conf" <<EOF
+# Ensure /var/lib/rhoim directory exists at boot
+d /var/lib/rhoim 0755 root root -
 # Create /etc/sysconfig/rhoim from template at boot
 # This is needed because /etc is read-only in bootc/ostree filesystems
+# The 'C' directive copies from source to destination, creating destination if source exists
 C /etc/sysconfig/rhoim 0600 root root /var/lib/rhoim/rhoim.template
 EOF
 
