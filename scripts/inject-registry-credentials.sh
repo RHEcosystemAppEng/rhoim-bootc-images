@@ -36,14 +36,53 @@ mount "$DEVICE" "$MOUNT_POINT" || {
     exit 1
 }
 
-echo "=== Creating /etc/sysconfig directory ==="
+echo "=== Creating directories ==="
 mkdir -p "$MOUNT_POINT/etc/sysconfig"
+mkdir -p "$MOUNT_POINT/etc/tmpfiles.d"
 
 echo "=== Creating /etc/sysconfig/rhoim with registry credentials ==="
-# Remove any existing file to ensure clean write
-rm -f "$MOUNT_POINT/etc/sysconfig/rhoim"
+# In bootc/ostree, /etc is read-only, so we use systemd-tmpfiles to create the file at boot
+# First, create a tmpfiles.d configuration that will create the file
+cat > "$MOUNT_POINT/etc/tmpfiles.d/rhoim-credentials.conf" <<EOF
+# Create /etc/sysconfig/rhoim with registry credentials at boot
+# This is needed because /etc is read-only in bootc/ostree filesystems
+f /etc/sysconfig/rhoim 0600 root root -
+EOF
 
-# Create the file with actual credentials (not comments)
+# Write the credentials content to a file that tmpfiles will use
+# We'll store the content in /var/lib/rhoim and have tmpfiles copy it
+mkdir -p "$MOUNT_POINT/var/lib/rhoim"
+cat > "$MOUNT_POINT/var/lib/rhoim/rhoim.template" <<EOF
+# RHOIM Environment Variables for bootc Model Serving
+
+# --- Core Paths and Configuration ---
+MODEL_ID="TinyLlama/TinyLlama-1.1B-Chat-v1.0"
+MODEL_PATH="/tmp/models"
+VLLM_PORT="8000"
+VLLM_HOST="0.0.0.0"
+
+# --- VLLM/Device Configuration ---
+VLLM_DEVICE_TYPE="auto"
+
+# --- Gateway/API Configuration ---
+API_KEYS="devkey1,devkey2"
+
+# --- Red Hat Registry Credentials ---
+# These credentials are used to authenticate with registry.redhat.io
+# Username format: Red Hat registry requires "org_id|username" format
+RHSM_ORG_ID="${ORG_ID}"
+REDHAT_REGISTRY_USERNAME="${ORG_ID}|${USERNAME}"
+REDHAT_REGISTRY_TOKEN="${TOKEN}"
+EOF
+
+# Update tmpfiles.d to copy from template
+cat > "$MOUNT_POINT/etc/tmpfiles.d/rhoim-credentials.conf" <<EOF
+# Create /etc/sysconfig/rhoim from template at boot
+# This is needed because /etc is read-only in bootc/ostree filesystems
+C /etc/sysconfig/rhoim 0600 root root /var/lib/rhoim/rhoim.template
+EOF
+
+# Also try writing directly to /etc/sysconfig (might work in some bootc setups)
 cat > "$MOUNT_POINT/etc/sysconfig/rhoim" <<EOF
 # RHOIM Environment Variables for bootc Model Serving
 
@@ -67,27 +106,38 @@ REDHAT_REGISTRY_USERNAME="${ORG_ID}|${USERNAME}"
 REDHAT_REGISTRY_TOKEN="${TOKEN}"
 EOF
 
-# Verify the file was written correctly
-if ! grep -q "^REDHAT_REGISTRY_USERNAME=" "$MOUNT_POINT/etc/sysconfig/rhoim"; then
-    echo "❌ Error: Credentials were not written correctly"
+# Verify the template file was written correctly
+if ! grep -q "^REDHAT_REGISTRY_USERNAME=" "$MOUNT_POINT/var/lib/rhoim/rhoim.template"; then
+    echo "❌ Error: Credentials template was not written correctly"
     umount "$MOUNT_POINT"
     exit 1
 fi
 
 echo "=== Setting correct permissions ==="
-chmod 600 "$MOUNT_POINT/etc/sysconfig/rhoim"
-chown root:root "$MOUNT_POINT/etc/sysconfig/rhoim"
+chmod 600 "$MOUNT_POINT/etc/sysconfig/rhoim" 2>/dev/null || true
+chmod 600 "$MOUNT_POINT/var/lib/rhoim/rhoim.template"
+chown root:root "$MOUNT_POINT/etc/sysconfig/rhoim" 2>/dev/null || true
+chown root:root "$MOUNT_POINT/var/lib/rhoim/rhoim.template"
 
-echo "=== Verifying file was created ==="
-if [ -f "$MOUNT_POINT/etc/sysconfig/rhoim" ]; then
+echo "=== Verifying files were created ==="
+if sudo test -f "$MOUNT_POINT/etc/sysconfig/rhoim"; then
     echo "✅ Successfully created /etc/sysconfig/rhoim"
     echo ""
     echo "File contents (credentials hidden):"
-    sed 's/\(REDHAT_REGISTRY_TOKEN=\)[^"]*/\1***HIDDEN***/' "$MOUNT_POINT/etc/sysconfig/rhoim"
+    sudo sed 's/\(REDHAT_REGISTRY_TOKEN=\)[^"]*/\1***HIDDEN***/' "$MOUNT_POINT/etc/sysconfig/rhoim"
 else
-    echo "❌ Error: File was not created"
-    umount "$MOUNT_POINT"
-    exit 1
+    echo "⚠️  Warning: /etc/sysconfig/rhoim not found (may be read-only in ostree)"
+fi
+
+if sudo test -f "$MOUNT_POINT/var/lib/rhoim/rhoim.template"; then
+    echo "✅ Successfully created /var/lib/rhoim/rhoim.template (backup location)"
+fi
+
+if sudo test -f "$MOUNT_POINT/etc/tmpfiles.d/rhoim-credentials.conf"; then
+    echo "✅ Successfully created tmpfiles.d configuration"
+    echo ""
+    echo "tmpfiles.d config:"
+    sudo cat "$MOUNT_POINT/etc/tmpfiles.d/rhoim-credentials.conf"
 fi
 
 echo ""

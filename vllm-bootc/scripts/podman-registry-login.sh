@@ -1,10 +1,20 @@
 #!/bin/bash
 set -euo pipefail
 
-# Load configuration from /etc/sysconfig/rhoim if present
+# Debug: Check if files exist
+echo "[DEBUG] Checking for credentials file..."
 if [ -f "/etc/sysconfig/rhoim" ]; then
+    echo "[DEBUG] Found /etc/sysconfig/rhoim"
     # shellcheck disable=SC1091
     source /etc/sysconfig/rhoim
+elif [ -f "/var/lib/rhoim/rhoim.template" ]; then
+    echo "[DEBUG] Found /var/lib/rhoim/rhoim.template, using as fallback"
+    # shellcheck disable=SC1091
+    source /var/lib/rhoim/rhoim.template
+else
+    echo "[DEBUG] Neither /etc/sysconfig/rhoim nor /var/lib/rhoim/rhoim.template found"
+    ls -la /etc/sysconfig/ 2>&1 | head -10 || true
+    ls -la /var/lib/rhoim/ 2>&1 || true
 fi
 
 # Check if registry credentials are provided
