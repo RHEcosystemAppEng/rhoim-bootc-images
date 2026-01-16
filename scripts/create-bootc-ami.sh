@@ -214,7 +214,7 @@ echo "Root partition: $ROOT_PARTITION"
 
 # Create mount point
 MOUNT_POINT="/mnt/bootc-root-$$"
-mkdir -p "$MOUNT_POINT"
+sudo mkdir -p "$MOUNT_POINT"
 
 # Mount the root filesystem
 echo "Mounting bootc root filesystem..."
