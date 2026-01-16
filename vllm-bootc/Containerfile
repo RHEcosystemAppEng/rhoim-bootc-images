@@ -170,6 +170,17 @@ EXPOSE 8000
 LABEL org.osbuild.bootc=true \
       bootc=true
 
+# Clean up build artifacts to reduce bootc lint warnings
+# Remove log files and dnf cache to satisfy bootc lint requirements
+RUN rm -rf /var/log/*.log /var/log/dnf* /var/log/rhsm && \
+    rm -rf /var/cache/dnf/* && \
+    rm -rf /var/lib/dkms/nvidia/*/source && \
+    rm -rf /var/roothome/buildinfo && \
+    # Create tmpfiles.d entries for required /var directories
+    mkdir -p /etc/tmpfiles.d && \
+    printf 'd /var/cache/dnf 0755 root root -\n' > /etc/tmpfiles.d/dnf-cache.conf && \
+    printf 'd /var/lib/dkms 0755 root root -\n' > /etc/tmpfiles.d/dkms.conf
+
 # Final bootc lint step
 RUN bootc container lint || echo "Bootc lint completed with warnings"
 
