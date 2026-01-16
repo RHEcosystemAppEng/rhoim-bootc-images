@@ -179,15 +179,21 @@ echo ""
 # The container must be run with --privileged, --pid=host, and device access to see block devices
 # Note: SSH keys will be injected AFTER installation (see Step 5) to avoid file access issues
 # Use containers-storage: transport when running bootc inside a container
+# Also mount the host's container storage so bootc can access the image
 if [[ "$IMAGE_NAME" == localhost/* ]]; then
     SOURCE_IMGREF="containers-storage:${IMAGE_NAME}"
+    # Get host container storage location and mount it
+    CONTAINER_STORAGE=$(sudo podman info --format '{{.Store.GraphRoot}}' 2>/dev/null || echo "/var/lib/containers/storage")
+    STORAGE_MOUNT="-v ${CONTAINER_STORAGE}:/var/lib/containers/storage:ro"
 else
     SOURCE_IMGREF="$IMAGE_NAME"
+    STORAGE_MOUNT=""
 fi
 
 sudo podman run --rm --privileged --pid=host \
     --device-cgroup-rule='b *:* rmw' \
     -v /dev:/dev \
+    $STORAGE_MOUNT \
     "$IMAGE_NAME" \
     bootc install to-disk --source-imgref "$SOURCE_IMGREF" --wipe --filesystem ext4 --karg console=ttyS0,115200n8 --karg root=LABEL=root "$DEVICE_PATH"
 
