@@ -182,9 +182,9 @@ echo ""
 # Also mount the host's container storage so bootc can access the image
 if [[ "$IMAGE_NAME" == localhost/* ]]; then
     SOURCE_IMGREF="containers-storage:${IMAGE_NAME}"
-    # Get host container storage location and mount it
+    # Get host container storage location and mount it (read-write for lock file access)
     CONTAINER_STORAGE=$(sudo podman info --format '{{.Store.GraphRoot}}' 2>/dev/null || echo "/var/lib/containers/storage")
-    STORAGE_MOUNT="-v ${CONTAINER_STORAGE}:/var/lib/containers/storage:ro"
+    STORAGE_MOUNT="-v ${CONTAINER_STORAGE}:/var/lib/containers/storage"
 else
     SOURCE_IMGREF="$IMAGE_NAME"
     STORAGE_MOUNT=""
