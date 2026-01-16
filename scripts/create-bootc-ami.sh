@@ -231,21 +231,21 @@ sudo cp "$SSH_KEY_ABS" "$MOUNT_POINT/root/.ssh/authorized_keys"
 sudo chmod 600 "$MOUNT_POINT/root/.ssh/authorized_keys"
 sudo chmod 700 "$MOUNT_POINT/root/.ssh"
 
-# Verify SSH keys were written
-if [ -f "$MOUNT_POINT/root/.ssh/authorized_keys" ]; then
+# Verify SSH keys were written (use sudo for file check since we're checking root's files)
+if sudo test -f "$MOUNT_POINT/root/.ssh/authorized_keys"; then
     echo -e "${GREEN}✅ SSH keys injected${NC}"
     echo "SSH keys file: $MOUNT_POINT/root/.ssh/authorized_keys"
     echo "Key count: $(sudo wc -l < "$MOUNT_POINT/root/.ssh/authorized_keys")"
 else
     echo -e "${RED}❌ Error: Failed to inject SSH keys${NC}"
     sudo umount "$MOUNT_POINT" 2>/dev/null || true
-    rmdir "$MOUNT_POINT" 2>/dev/null || true
+    sudo rmdir "$MOUNT_POINT" 2>/dev/null || true
     exit 1
 fi
 
 # Unmount
 sudo umount "$MOUNT_POINT"
-rmdir "$MOUNT_POINT"
+sudo rmdir "$MOUNT_POINT"
 echo -e "${GREEN}✅ SSH keys injection complete${NC}"
 
 # Step 6: Inject Registry Credentials (if provided)
