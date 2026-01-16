@@ -20,14 +20,23 @@ if [ -f "/etc/sysconfig/rhoim" ]; then
 fi
 
 # If credentials not found, try template file
-if [ "$CREDENTIALS_FOUND" = false ] && [ -f "/var/lib/rhoim/rhoim.template" ]; then
-    echo "[DEBUG] Found /var/lib/rhoim/rhoim.template, using as fallback"
-    # shellcheck disable=SC1091
-    source /var/lib/rhoim/rhoim.template
-    # Check if variables were actually set
-    if [ -n "${REDHAT_REGISTRY_USERNAME:-}" ] && [ -n "${REDHAT_REGISTRY_TOKEN:-}" ]; then
-        echo "[DEBUG] Credentials found in /var/lib/rhoim/rhoim.template"
-        CREDENTIALS_FOUND=true
+# First ensure the directory exists (in case tmpfiles.d hasn't run yet)
+if [ "$CREDENTIALS_FOUND" = false ]; then
+    if [ ! -d "/var/lib/rhoim" ]; then
+        echo "[DEBUG] Creating /var/lib/rhoim directory"
+        mkdir -p /var/lib/rhoim
+        chmod 755 /var/lib/rhoim
+    fi
+    
+    if [ -f "/var/lib/rhoim/rhoim.template" ]; then
+        echo "[DEBUG] Found /var/lib/rhoim/rhoim.template, using as fallback"
+        # shellcheck disable=SC1091
+        source /var/lib/rhoim/rhoim.template
+        # Check if variables were actually set
+        if [ -n "${REDHAT_REGISTRY_USERNAME:-}" ] && [ -n "${REDHAT_REGISTRY_TOKEN:-}" ]; then
+            echo "[DEBUG] Credentials found in /var/lib/rhoim/rhoim.template"
+            CREDENTIALS_FOUND=true
+        fi
     fi
 fi
 
