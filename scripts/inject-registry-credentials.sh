@@ -78,10 +78,14 @@ REDHAT_REGISTRY_TOKEN="${TOKEN}"
 EOF
 
 # Update tmpfiles.d to:
-# 1. Copy template from /usr/share/rhoim (base filesystem) to /var/lib/rhoim (writable overlay) at boot
-# 2. Copy from /var/lib/rhoim to /etc/sysconfig/rhoim (read-only /etc, needs tmpfiles.d)
+# 1. Create /var/lib/rhoim directory (writable overlay)
+# 2. Copy template from /usr/share/rhoim (base filesystem) to /var/lib/rhoim (writable overlay) at boot
+# 3. Copy from /var/lib/rhoim to /etc/sysconfig/rhoim (read-only /etc, needs tmpfiles.d)
 # This ensures the template is accessible at runtime even though /var is a fresh overlay mount
 cat > "$MOUNT_POINT/etc/tmpfiles.d/rhoim-credentials.conf" <<EOF
+# Create /var/lib/rhoim directory (writable overlay)
+d /var/lib/rhoim 0755 root root -
+
 # Copy template from base filesystem to writable overlay at boot
 # /var is a fresh overlay mount, so we copy from /usr/share (base) to /var/lib (overlay)
 C /var/lib/rhoim/rhoim.template 0600 root root /usr/share/rhoim/rhoim.template
