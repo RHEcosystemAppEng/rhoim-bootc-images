@@ -158,6 +158,9 @@ RUN chmod +x /usr/local/bin/nvidia-container-setup.sh && \
     mkdir -p /sysroot && \
     # Create podman auth directory for registry credentials (required for --authfile)
     mkdir -p /root/.config/containers && \
+    # Create /usr/share/rhoim directory for template file (part of base filesystem)
+    # This directory will be available at runtime for the podman-registry-login script
+    mkdir -p /usr/share/rhoim && \
     # Enable services
     systemctl enable nvidia-container-setup.service && \
     systemctl enable podman-registry-login.service && \
