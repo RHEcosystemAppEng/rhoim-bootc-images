@@ -7,6 +7,14 @@ key_name         = "your-key-pair-name"
 ssh_cidr_blocks  = ["YOUR_IP/32"]       # Get with: curl checkip.amazonaws.com
 api_cidr_blocks  = ["YOUR_IP/32"]       # For vLLM API access (tester only)
 
+# Instance configuration
+instance_type    = "g4dn.xlarge"         # GPU instance type (g4dn.xlarge, g5.xlarge, etc.)
+root_volume_size = 50                    # Minimum 50GB for bootc images with vLLM (20GB insufficient)
+
+# Bootc image support
+is_bootc_image   = false                 # Set to true if using a bootc AMI
+install_nvidia_drivers = true           # Attempt NVIDIA driver installation (may need manual install for bootc)
+
 rhsm_activation_key      = "your-activation-key"
 rhsm_org_id              = "your-org-id"
 redhat_registry_username = "your-username"

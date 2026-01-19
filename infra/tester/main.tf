@@ -60,9 +60,21 @@ variable "ami_id" {
 }
 
 variable "root_volume_size" {
-  description = "Size of root volume in GB"
+  description = "Size of root volume in GB (minimum 50GB recommended for bootc images with vLLM)"
   type        = number
-  default     = 200
+  default     = 50
+}
+
+variable "is_bootc_image" {
+  description = "Whether the AMI is a bootc image (affects NVIDIA driver installation approach)"
+  type        = bool
+  default     = false
+}
+
+variable "install_nvidia_drivers" {
+  description = "Whether to attempt NVIDIA driver installation (for GPU instances). For bootc images, drivers may need manual installation."
+  type        = bool
+  default     = true
 }
 
 # Local values for resource naming
@@ -150,19 +162,31 @@ resource "aws_instance" "gpu_host" {
 locals {
   user_data = <<-EOF
     #!/bin/bash
-    set -ex
+    set -e  # Exit on error, but handle gracefully
 
     # Log output to file for debugging
     exec > >(tee /var/log/user-data.log) 2>&1
 
-    echo "Starting RHEL 9.6 GPU instance setup - $(date)"
+    echo "Starting GPU instance setup - $(date)"
+    echo "Bootc image: ${var.is_bootc_image}"
+    echo "Install NVIDIA drivers: ${var.install_nvidia_drivers}"
 
-    # Step 1: Install bootc and container tools
-    echo "=== Installing bootc, podman, and container tools ==="
-    dnf -y install bootc podman skopeo
+    # Detect if this is a bootc image (check for bootc or ostree)
+    if [ -f /sysroot/ostree/repo/config ] || command -v bootc > /dev/null 2>&1; then
+        IS_BOOTC=true
+        echo "Detected bootc/ostree image"
+    else
+        IS_BOOTC=false
+        echo "Detected standard RHEL image"
+    fi
 
-    # Enable and start podman socket
-    systemctl enable --now podman.socket
+    if [ "$IS_BOOTC" = "false" ]; then
+        # Standard RHEL image setup
+        echo "=== Installing bootc, podman, and container tools ==="
+        dnf -y install bootc podman skopeo || echo "Warning: Some packages may not be available"
+
+        # Enable and start podman socket
+        systemctl enable --now podman.socket
 
     # Step 2: Upgrade OpenSSL to fix bootc library compatibility
     echo "=== Upgrading OpenSSL for bootc compatibility ==="
@@ -196,79 +220,108 @@ locals {
       echo "exclude=kernel*" >> /etc/dnf/dnf.conf
     fi
 
-    # Step 4: Add NVIDIA CUDA repository and install precompiled driver
-    echo "=== Adding NVIDIA CUDA repository ==="
-    dnf config-manager --add-repo https://developer.download.nvidia.com/compute/cuda/repos/rhel9/x86_64/cuda-rhel9.repo
+        # Step 4: Add NVIDIA CUDA repository and install precompiled driver
+        if [ "${var.install_nvidia_drivers}" = "true" ]; then
+            echo "=== Adding NVIDIA CUDA repository ==="
+            dnf config-manager --add-repo https://developer.download.nvidia.com/compute/cuda/repos/rhel9/x86_64/cuda-rhel9.repo || echo "Warning: Failed to add NVIDIA repo"
 
-    # Step 5: Install NVIDIA driver using precompiled modules
-    echo "=== Installing NVIDIA driver 570 with precompiled kernel modules ==="
-    dnf -y module install nvidia-driver:570
+            # Step 5: Install NVIDIA driver using precompiled modules
+            echo "=== Installing NVIDIA driver 570 with precompiled kernel modules ==="
+            dnf -y module install nvidia-driver:570 || echo "Warning: NVIDIA driver installation failed, may need manual installation"
 
-    # Step 6: Install NVIDIA Container Toolkit
-    echo "=== Installing NVIDIA Container Toolkit ==="
-    curl -s -L https://nvidia.github.io/libnvidia-container/stable/rpm/nvidia-container-toolkit.repo | \
-      tee /etc/yum.repos.d/nvidia-container-toolkit.repo
+            # Step 6: Install NVIDIA Container Toolkit
+            echo "=== Installing NVIDIA Container Toolkit ==="
+            curl -s -L https://nvidia.github.io/libnvidia-container/stable/rpm/nvidia-container-toolkit.repo | \
+              tee /etc/yum.repos.d/nvidia-container-toolkit.repo || echo "Warning: Failed to add NVIDIA Container Toolkit repo"
 
-    dnf -y install --nogpgcheck nvidia-container-toolkit
-
-    # Step 7: Create systemd service to complete NVIDIA setup after reboot
-    echo "=== Creating post-reboot NVIDIA setup service ==="
-    cat > /etc/systemd/system/nvidia-post-boot-setup.service <<'SYSTEMD_EOF'
-    [Unit]
-    Description=NVIDIA Driver Post-Boot Setup
-    After=network.target
-    ConditionPathExists=!/var/lib/nvidia-setup-complete
-
-    [Service]
-    Type=oneshot
-    ExecStart=/usr/local/bin/nvidia-post-boot-setup.sh
-    RemainAfterExit=yes
-
-    [Install]
-    WantedBy=multi-user.target
-    SYSTEMD_EOF
-
-    # Create the post-boot setup script
-    cat > /usr/local/bin/nvidia-post-boot-setup.sh <<'SCRIPT_EOF'
-    #!/bin/bash
-    set -ex
-
-    exec > >(tee -a /var/log/nvidia-post-boot-setup.log) 2>&1
-
-    echo "Running NVIDIA post-boot setup - $(date)"
-
-    echo "=== Verifying NVIDIA driver installation ==="
-    if nvidia-smi; then
-        echo "NVIDIA driver installed successfully"
+            dnf -y install --nogpgcheck nvidia-container-toolkit || echo "Warning: NVIDIA Container Toolkit installation failed"
+        fi
     else
-        echo "WARNING: nvidia-smi failed, driver may need attention"
-        exit 1
+        # Bootc image setup - limited package installation
+        echo "=== Bootc image detected - limited setup ==="
+        echo "Note: NVIDIA drivers must be installed in the bootc image during build"
+        echo "      The bootc image includes nvidia-container-setup.service which configures"
+        echo "      container access to GPUs, but NVIDIA drivers must be pre-installed"
+        
+        if [ "${var.install_nvidia_drivers}" = "true" ]; then
+            echo "=== NVIDIA driver installation on bootc images ==="
+            echo "⚠️  Warning: NVIDIA drivers cannot be installed post-deployment on bootc images"
+            echo "   Drivers must be included in the bootc image Containerfile during build"
+            echo "   The nvidia-container-setup.service will configure GPU access if drivers exist"
+        fi
     fi
 
-    echo "=== Generating CDI configuration ==="
-    nvidia-ctk cdi generate --output=/etc/cdi/nvidia.yaml
+    # Step 7: Create systemd service to complete NVIDIA setup after reboot (only for non-bootc)
+    if [ "$IS_BOOTC" = "false" ] && [ "${var.install_nvidia_drivers}" = "true" ]; then
+        echo "=== Creating post-reboot NVIDIA setup service ==="
+        cat > /etc/systemd/system/nvidia-post-boot-setup.service <<'SYSTEMD_EOF'
+        [Unit]
+        Description=NVIDIA Driver Post-Boot Setup
+        After=network.target
+        ConditionPathExists=!/var/lib/nvidia-setup-complete
 
-    echo "=== Setting GPU device permissions ==="
-    chmod 666 /dev/nvidia* 2>/dev/null || true
+        [Service]
+        Type=oneshot
+        ExecStart=/usr/local/bin/nvidia-post-boot-setup.sh
+        RemainAfterExit=yes
 
-    cat > /etc/udev/rules.d/70-nvidia.rules <<'UDEV_EOF'
-    KERNEL=="nvidia*", MODE="0666"
-    UDEV_EOF
+        [Install]
+        WantedBy=multi-user.target
+        SYSTEMD_EOF
 
-    udevadm control --reload-rules
+        # Create the post-boot setup script
+        cat > /usr/local/bin/nvidia-post-boot-setup.sh <<'SCRIPT_EOF'
+        #!/bin/bash
+        set -e
 
-    echo "=== NVIDIA setup complete - $(date) ==="
-    touch /var/lib/nvidia-setup-complete
+        exec > >(tee -a /var/log/nvidia-post-boot-setup.log) 2>&1
 
-    SCRIPT_EOF
+        echo "Running NVIDIA post-boot setup - $(date)"
 
-    chmod +x /usr/local/bin/nvidia-post-boot-setup.sh
+        echo "=== Verifying NVIDIA driver installation ==="
+        if command -v nvidia-smi > /dev/null 2>&1 && nvidia-smi > /dev/null 2>&1; then
+            echo "NVIDIA driver installed successfully"
+        else
+            echo "WARNING: nvidia-smi failed, driver may need attention"
+            echo "         Check /var/log/user-data.log for installation errors"
+            exit 0  # Don't fail, allow system to continue
+        fi
 
-    systemctl enable nvidia-post-boot-setup.service
+        echo "=== Generating CDI configuration ==="
+        if command -v nvidia-ctk > /dev/null 2>&1; then
+            mkdir -p /etc/cdi
+            nvidia-ctk cdi generate --output=/etc/cdi/nvidia.yaml || echo "Warning: CDI generation failed"
+        else
+            echo "Warning: nvidia-ctk not found, skipping CDI generation"
+        fi
 
-    # Step 8: Schedule reboot
-    echo "=== Setup complete, scheduling reboot ==="
-    shutdown -r +1 "Rebooting to complete NVIDIA GPU setup"
+        echo "=== Setting GPU device permissions ==="
+        chmod 666 /dev/nvidia* 2>/dev/null || true
+
+        cat > /etc/udev/rules.d/70-nvidia.rules <<'UDEV_EOF'
+        KERNEL=="nvidia*", MODE="0666"
+        UDEV_EOF
+
+        udevadm control --reload-rules || echo "Warning: Failed to reload udev rules"
+
+        echo "=== NVIDIA setup complete - $(date) ==="
+        touch /var/lib/nvidia-setup-complete
+
+        SCRIPT_EOF
+
+        chmod +x /usr/local/bin/nvidia-post-boot-setup.sh
+        systemctl enable nvidia-post-boot-setup.service
+
+        # Step 8: Schedule reboot (only for non-bootc)
+        echo "=== Setup complete, scheduling reboot ==="
+        shutdown -r +1 "Rebooting to complete NVIDIA GPU setup"
+    else
+        echo "=== Setup complete ==="
+        if [ "$IS_BOOTC" = "true" ]; then
+            echo "Bootc image detected - NVIDIA drivers must be installed in the image during build"
+            echo "The nvidia-container-setup.service will configure GPU access if drivers are present"
+        fi
+    fi
   EOF
 }
 

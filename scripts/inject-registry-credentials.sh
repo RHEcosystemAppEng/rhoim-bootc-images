@@ -50,10 +50,11 @@ f /etc/sysconfig/rhoim 0600 root root -
 EOF
 
 # Write the credentials content to a file that will persist
-# Store in /usr/share/rhoim which is part of the base filesystem in bootc/ostree
-# /var is a writable overlay and doesn't include base image files, so we use /usr/share instead
-mkdir -p "$MOUNT_POINT/usr/share/rhoim"
-cat > "$MOUNT_POINT/usr/share/rhoim/rhoim.template" <<EOF
+# Store in /var/lib/rhoim which is part of the writable overlay in bootc/ostree
+# /usr is read-only from base image, so files written there during AMI creation aren't accessible at runtime
+# /var is a writable overlay, so files written there persist and are accessible
+mkdir -p "$MOUNT_POINT/var/lib/rhoim"
+cat > "$MOUNT_POINT/var/lib/rhoim/rhoim.template" <<EOF
 # RHOIM Environment Variables for bootc Model Serving
 
 # --- Core Paths and Configuration ---
@@ -78,12 +79,12 @@ EOF
 
 # Update tmpfiles.d to copy from template
 # Use 'C' directive which copies from source to destination
-# Source is in /usr/share/rhoim which is part of base filesystem and accessible at runtime
+# Source is in /var/lib/rhoim which is part of writable overlay and accessible at runtime
 cat > "$MOUNT_POINT/etc/tmpfiles.d/rhoim-credentials.conf" <<EOF
 # Create /etc/sysconfig/rhoim from template at boot
 # This is needed because /etc is read-only in bootc/ostree filesystems
-# Source file is in /usr/share/rhoim which is part of base filesystem (not /var overlay)
-C /etc/sysconfig/rhoim 0600 root root /usr/share/rhoim/rhoim.template
+# Source file is in /var/lib/rhoim which is part of writable overlay (accessible at runtime)
+C /etc/sysconfig/rhoim 0600 root root /var/lib/rhoim/rhoim.template
 EOF
 
 # Also try writing directly to /etc/sysconfig (might work in some bootc setups)
@@ -111,7 +112,7 @@ REDHAT_REGISTRY_TOKEN="${TOKEN}"
 EOF
 
 # Verify the template file was written correctly
-if ! grep -q "^REDHAT_REGISTRY_USERNAME=" "$MOUNT_POINT/usr/share/rhoim/rhoim.template"; then
+if ! grep -q "^REDHAT_REGISTRY_USERNAME=" "$MOUNT_POINT/var/lib/rhoim/rhoim.template"; then
     echo "❌ Error: Credentials template was not written correctly"
     umount "$MOUNT_POINT"
     exit 1
@@ -119,9 +120,9 @@ fi
 
 echo "=== Setting correct permissions ==="
 chmod 600 "$MOUNT_POINT/etc/sysconfig/rhoim" 2>/dev/null || true
-chmod 600 "$MOUNT_POINT/usr/share/rhoim/rhoim.template"
+chmod 600 "$MOUNT_POINT/var/lib/rhoim/rhoim.template"
 chown root:root "$MOUNT_POINT/etc/sysconfig/rhoim" 2>/dev/null || true
-chown root:root "$MOUNT_POINT/usr/share/rhoim/rhoim.template"
+chown root:root "$MOUNT_POINT/var/lib/rhoim/rhoim.template"
 
 echo "=== Verifying files were created ==="
 if sudo test -f "$MOUNT_POINT/etc/sysconfig/rhoim"; then
@@ -133,8 +134,8 @@ else
     echo "⚠️  Warning: /etc/sysconfig/rhoim not found (may be read-only in ostree)"
 fi
 
-if sudo test -f "$MOUNT_POINT/usr/share/rhoim/rhoim.template"; then
-    echo "✅ Successfully created /usr/share/rhoim/rhoim.template (base filesystem location)"
+if sudo test -f "$MOUNT_POINT/var/lib/rhoim/rhoim.template"; then
+    echo "✅ Successfully created /var/lib/rhoim/rhoim.template (writable overlay location)"
 fi
 
 if sudo test -f "$MOUNT_POINT/etc/tmpfiles.d/rhoim-credentials.conf"; then
