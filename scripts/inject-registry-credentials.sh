@@ -49,12 +49,27 @@ cat > "$MOUNT_POINT/etc/tmpfiles.d/rhoim-credentials.conf" <<EOF
 f /etc/sysconfig/rhoim 0600 root root -
 EOF
 
-# Write the credentials content to /usr/share/rhoim/rhoim.template (base filesystem)
-# This location is part of the base image and will be copied to /var/lib/rhoim at boot by tmpfiles.d
-# /var is a fresh overlay mount at boot, so files written there during AMI creation aren't accessible
-# /usr/share is part of the base filesystem, so files written there are accessible
+# Write the credentials content to the ostree deployment directory
+# In bootc/ostree, /usr is read-only from base image, but we can write to the deployment directory
+# The deployment directory is what ostree uses at runtime, not the root filesystem
+# When we write to root /usr/share during AMI creation, it exists on snapshot but isn't accessible at runtime
+# because ostree uses /ostree/deploy/.../usr/share at runtime, not root /usr/share
+DEPLOY_DIR=$(find "$MOUNT_POINT/ostree/deploy/default/deploy" -maxdepth 1 -type d -name "*.0" 2>/dev/null | head -1)
+if [ -n "$DEPLOY_DIR" ]; then
+    echo "Found ostree deployment directory: $DEPLOY_DIR"
+    mkdir -p "$DEPLOY_DIR/usr/share/rhoim"
+    DEPLOY_TEMPLATE="$DEPLOY_DIR/usr/share/rhoim/rhoim.template"
+else
+    echo "Warning: Could not find ostree deployment directory, writing to root /usr/share/rhoim"
+    mkdir -p "$MOUNT_POINT/usr/share/rhoim"
+    DEPLOY_TEMPLATE="$MOUNT_POINT/usr/share/rhoim/rhoim.template"
+fi
+
+# Also write to root /usr/share/rhoim for backup
 mkdir -p "$MOUNT_POINT/usr/share/rhoim"
-cat > "$MOUNT_POINT/usr/share/rhoim/rhoim.template" <<EOF
+
+# Write credentials to deployment directory (what ostree uses at runtime)
+cat > "$DEPLOY_TEMPLATE" <<EOF
 # RHOIM Environment Variables for bootc Model Serving
 
 # --- Core Paths and Configuration ---
@@ -119,17 +134,48 @@ REDHAT_REGISTRY_USERNAME="${ORG_ID}|${USERNAME}"
 REDHAT_REGISTRY_TOKEN="${TOKEN}"
 EOF
 
-# Verify the template file was written correctly
+# Also write to root /usr/share/rhoim (backup)
+cat > "$MOUNT_POINT/usr/share/rhoim/rhoim.template" <<EOF
+# RHOIM Environment Variables for bootc Model Serving
+
+# --- Core Paths and Configuration ---
+MODEL_ID="TinyLlama/TinyLlama-1.1B-Chat-v1.0"
+MODEL_PATH="/tmp/models"
+VLLM_PORT="8000"
+VLLM_HOST="0.0.0.0"
+
+# --- VLLM/Device Configuration ---
+VLLM_DEVICE_TYPE="auto"
+
+# --- Gateway/API Configuration ---
+API_KEYS="devkey1,devkey2"
+
+# --- Red Hat Registry Credentials ---
+# These credentials are used to authenticate with registry.redhat.io
+# Username format: Red Hat registry requires "org_id|username" format
+RHSM_ORG_ID="${ORG_ID}"
+REDHAT_REGISTRY_USERNAME="${ORG_ID}|${USERNAME}"
+REDHAT_REGISTRY_TOKEN="${TOKEN}"
+EOF
+
+# Verify the template files were written correctly
+if ! grep -q "^REDHAT_REGISTRY_USERNAME=" "$DEPLOY_TEMPLATE"; then
+    echo "❌ Error: Credentials template was not written correctly to deployment directory"
+    umount "$MOUNT_POINT"
+    exit 1
+fi
 if ! grep -q "^REDHAT_REGISTRY_USERNAME=" "$MOUNT_POINT/usr/share/rhoim/rhoim.template"; then
-    echo "❌ Error: Credentials template was not written correctly"
+    echo "❌ Error: Credentials template was not written correctly to /usr/share/rhoim/rhoim.template"
     umount "$MOUNT_POINT"
     exit 1
 fi
 
 echo "=== Setting correct permissions ==="
 chmod 600 "$MOUNT_POINT/etc/sysconfig/rhoim" 2>/dev/null || true
+chmod 600 "$DEPLOY_TEMPLATE"
 chmod 600 "$MOUNT_POINT/usr/share/rhoim/rhoim.template"
 chown root:root "$MOUNT_POINT/etc/sysconfig/rhoim" 2>/dev/null || true
+chown root:root "$DEPLOY_TEMPLATE"
 chown root:root "$MOUNT_POINT/usr/share/rhoim/rhoim.template"
 
 echo "=== Verifying files were created ==="
@@ -142,9 +188,13 @@ else
     echo "⚠️  Warning: /etc/sysconfig/rhoim not found (may be read-only in ostree)"
 fi
 
+if sudo test -f "$DEPLOY_TEMPLATE"; then
+    echo "✅ Successfully created template in ostree deployment directory"
+    echo "   Location: $DEPLOY_TEMPLATE"
+    echo "   This is what ostree uses at runtime"
+fi
 if sudo test -f "$MOUNT_POINT/usr/share/rhoim/rhoim.template"; then
-    echo "✅ Successfully created /usr/share/rhoim/rhoim.template (base filesystem location)"
-    echo "   This will be copied to /var/lib/rhoim at boot by tmpfiles.d"
+    echo "✅ Successfully created /usr/share/rhoim/rhoim.template (backup location)"
 fi
 
 if sudo test -f "$MOUNT_POINT/etc/tmpfiles.d/rhoim-credentials.conf"; then
