@@ -19,8 +19,7 @@ if [ -f "/etc/sysconfig/rhoim" ]; then
     fi
 fi
 
-# If credentials not found, try template file from /var/lib/rhoim (writable overlay)
-# This is where the template is written during AMI creation and is accessible at runtime
+# If credentials not found, try template file from /var/lib/rhoim (writable overlay, copied by tmpfiles.d)
 if [ "$CREDENTIALS_FOUND" = false ] && [ -f "/var/lib/rhoim/rhoim.template" ]; then
     echo "[DEBUG] Found /var/lib/rhoim/rhoim.template, using as fallback"
     # shellcheck disable=SC1091
@@ -28,6 +27,19 @@ if [ "$CREDENTIALS_FOUND" = false ] && [ -f "/var/lib/rhoim/rhoim.template" ]; t
     # Check if variables were actually set
     if [ -n "${REDHAT_REGISTRY_USERNAME:-}" ] && [ -n "${REDHAT_REGISTRY_TOKEN:-}" ]; then
         echo "[DEBUG] Credentials found in /var/lib/rhoim/rhoim.template"
+        CREDENTIALS_FOUND=true
+    fi
+fi
+
+# If still not found, try template file from /usr/share/rhoim (base filesystem, always accessible)
+# This is where the template is written during AMI creation and is part of the base image
+if [ "$CREDENTIALS_FOUND" = false ] && [ -f "/usr/share/rhoim/rhoim.template" ]; then
+    echo "[DEBUG] Found /usr/share/rhoim/rhoim.template, using as fallback"
+    # shellcheck disable=SC1091
+    source /usr/share/rhoim/rhoim.template
+    # Check if variables were actually set
+    if [ -n "${REDHAT_REGISTRY_USERNAME:-}" ] && [ -n "${REDHAT_REGISTRY_TOKEN:-}" ]; then
+        echo "[DEBUG] Credentials found in /usr/share/rhoim/rhoim.template"
         CREDENTIALS_FOUND=true
     fi
 fi
@@ -47,6 +59,14 @@ if [ "$CREDENTIALS_FOUND" = false ]; then
     else
         echo "[DEBUG] /var/lib/rhoim/rhoim.template not found"
         ls -la /var/lib/rhoim/ 2>&1 || true
+    fi
+    if [ -f "/usr/share/rhoim/rhoim.template" ]; then
+        echo "[DEBUG] /usr/share/rhoim/rhoim.template exists"
+        echo "[DEBUG] Checking for credentials in template:"
+        grep -E "REDHAT_REGISTRY_(USERNAME|TOKEN)=" /usr/share/rhoim/rhoim.template 2>&1 | sed 's/\(TOKEN=\)[^"]*/\1***HIDDEN***/' || true
+    else
+        echo "[DEBUG] /usr/share/rhoim/rhoim.template not found"
+        ls -la /usr/share/rhoim/ 2>&1 || true
     fi
     echo "[WARNING] Red Hat registry credentials not found"
     echo "[WARNING] Set REDHAT_REGISTRY_USERNAME and REDHAT_REGISTRY_TOKEN to enable registry login"
