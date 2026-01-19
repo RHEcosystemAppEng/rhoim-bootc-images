@@ -1,6 +1,6 @@
 [Unit]
 Description=Podman Registry Login for Red Hat Registry
-After=network-online.target podman.socket systemd-tmpfiles-setup.service
+After=network-online.target podman.socket systemd-tmpfiles-setup.service systemd-tmpfiles-setup-dev.service
 Before=rhoim-vllm.service
 Wants=network-online.target
 Requires=podman.socket
