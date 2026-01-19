@@ -149,10 +149,11 @@ COPY scripts/nvidia-container-setup.sh /usr/local/bin/nvidia-container-setup.sh
 COPY scripts/run-vllm-container.sh /usr/local/bin/run-vllm-container.sh
 COPY scripts/podman-registry-login.sh /usr/local/bin/podman-registry-login.sh
 
-# Create /var/lib/rhoim directory for template file (writable overlay location)
-# The template will be populated during AMI creation, but the directory must exist
-# /var is a writable overlay in bootc/ostree, so files written there during AMI creation are accessible at runtime
-RUN mkdir -p /var/lib/rhoim
+# Create template file in base image at /usr/share/rhoim (read-only base filesystem)
+# This will be copied to /var/lib/rhoim at boot by tmpfiles.d
+# We include a base template here; credentials will be injected during AMI creation
+RUN mkdir -p /usr/share/rhoim && \
+    cp /etc/sysconfig/rhoim /usr/share/rhoim/rhoim.template
 
 # Create necessary directories and setup
 RUN chmod +x /usr/local/bin/nvidia-container-setup.sh && \
@@ -163,9 +164,6 @@ RUN chmod +x /usr/local/bin/nvidia-container-setup.sh && \
     mkdir -p /sysroot && \
     # Create podman auth directory for registry credentials (required for --authfile)
     mkdir -p /root/.config/containers && \
-    # Create /var/lib/rhoim directory for template file (writable overlay location)
-    # This directory will be available at runtime for the podman-registry-login script
-    mkdir -p /var/lib/rhoim && \
     # Enable services
     systemctl enable nvidia-container-setup.service && \
     systemctl enable podman-registry-login.service && \
