@@ -1,6 +1,6 @@
 [Unit]
 Description=NVIDIA Container Toolkit Setup
-After=network.target
+After=network.target systemd-modules-load.service
 Before=rhoim-vllm.service
 ConditionPathExists=!/var/lib/nvidia-container-setup-complete
 
