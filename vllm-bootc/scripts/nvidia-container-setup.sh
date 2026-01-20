@@ -1,6 +1,9 @@
 #!/bin/bash
 set -euo pipefail
 
+# Redirect output to console and journal for debugging
+exec > >(tee -a /dev/console) 2>&1
+
 # Load NVIDIA kernel modules if they exist
 echo "=== Loading NVIDIA kernel modules ==="
 # Check if nvidia module exists
