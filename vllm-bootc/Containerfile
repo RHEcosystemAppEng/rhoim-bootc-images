@@ -43,7 +43,7 @@ RUN --mount=type=secret,id=rhsm,target=/tmp/rhsm.conf \
       'sslclientcert=/etc/pki/entitlement/cert.pem' \
       'metadata_expire=86400' \
       'enabled_metadata=1' > /etc/yum.repos.d/rhel9-appstream.repo && \
-    dnf -v -y install podman skopeo systemd && \
+    dnf -v -y install podman skopeo systemd openssh-server openssh-clients passwd && \
     dnf clean all
 
 # =============================================================================
@@ -127,7 +127,15 @@ RUN --mount=type=secret,id=rhsm,target=/tmp/rhsm.conf \
     echo "Installing DKMS..." && \
     dnf -y install dkms && \
     echo "Installing NVIDIA driver packages from CUDA repository..." && \
-    dnf -y install nvidia-driver nvidia-driver-cuda && \
+    echo "Installing driver 570 for CUDA 12.x compatibility..." && \
+    echo "Checking available driver versions..." && \
+    dnf list available nvidia-driver* 2>/dev/null | grep -E 'nvidia-driver-[0-9]+' | head -5 || echo "Checking driver packages..." && \
+    echo "Attempting to install driver 570..." && \
+    (dnf -y install nvidia-driver-570 nvidia-driver-cuda-570 2>&1 || \
+     (echo "Driver 570 not available, trying 550..." && dnf -y install nvidia-driver-550 nvidia-driver-cuda-550 2>&1) || \
+     (echo "Driver 550 not available, falling back to latest..." && dnf -y install nvidia-driver nvidia-driver-cuda 2>&1)) && \
+    echo "Installed driver version:" && \
+    rpm -q nvidia-driver nvidia-driver-cuda 2>/dev/null | head -2 || echo "Driver packages installed" && \
     echo "✅ NVIDIA drivers installed successfully" && \
     echo "Verifying installation..." && \
     rpm -q nvidia-driver nvidia-driver-cuda && \
@@ -152,6 +160,23 @@ RUN rm -f /etc/yum.repos.d/rhel9-baseos.repo /etc/yum.repos.d/rhel9-appstream.re
 # Enable and start podman socket
 RUN systemctl enable podman.socket
 
+# =============================================================================
+# SSH Configuration for Testing
+# =============================================================================
+# Enable password-based authentication for testing purposes
+# Note: Root password will be injected during AMI creation (not baked into image)
+RUN systemctl enable sshd.service && \
+    # Configure SSH to allow password authentication
+    sed -i 's/#PasswordAuthentication yes/PasswordAuthentication yes/' /etc/ssh/sshd_config && \
+    sed -i 's/PasswordAuthentication no/PasswordAuthentication yes/' /etc/ssh/sshd_config && \
+    sed -i 's/#PermitRootLogin prohibit-password/PermitRootLogin yes/' /etc/ssh/sshd_config && \
+    sed -i 's/PermitRootLogin no/PermitRootLogin yes/' /etc/ssh/sshd_config && \
+    # Generate SSH host keys if they don't exist
+    ssh-keygen -A -f /etc/ssh || true && \
+    # Ensure SSH directory exists
+    mkdir -p /etc/ssh && \
+    chmod 755 /etc/ssh
+
 # Copy systemd service and configuration files
 COPY etc/ /etc/
 
@@ -159,6 +184,7 @@ COPY etc/ /etc/
 COPY scripts/nvidia-container-setup.sh /usr/local/bin/nvidia-container-setup.sh
 COPY scripts/run-vllm-container.sh /usr/local/bin/run-vllm-container.sh
 COPY scripts/podman-registry-login.sh /usr/local/bin/podman-registry-login.sh
+COPY scripts/check-cuda-compatibility.sh /usr/local/bin/check-cuda-compatibility.sh
 
 # Create template file in base image at /usr/share/rhoim (read-only base filesystem)
 # This will be copied to /var/lib/rhoim at boot by tmpfiles.d
@@ -170,6 +196,7 @@ RUN mkdir -p /usr/share/rhoim && \
 RUN chmod +x /usr/local/bin/nvidia-container-setup.sh && \
     chmod +x /usr/local/bin/run-vllm-container.sh && \
     chmod +x /usr/local/bin/podman-registry-login.sh && \
+    chmod +x /usr/local/bin/check-cuda-compatibility.sh && \
     mkdir -p /opt/rhoim/{bin,models,gateway} /tmp/models && \
     # Create /sysroot directory required by bootc lint
     mkdir -p /sysroot && \
