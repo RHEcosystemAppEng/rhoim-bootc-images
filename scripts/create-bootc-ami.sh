@@ -8,10 +8,12 @@
 # 5. Volume size is 50GB minimum
 # 6. All resources (Volume, Snapshot, AMI) are tagged for easy cleanup
 #
-# Usage: ./create-bootc-ami.sh [region] [availability-zone] [org-id] [username] [token]
+# Usage: ./create-bootc-ami.sh [region] [availability-zone] [org-id] [username] [token] [root-password]
 #
 # Example:
-#   ./create-bootc-ami.sh us-east-1 us-east-1a your-org-id your-username your-token
+#   ./create-bootc-ami.sh us-east-1 us-east-1a your-org-id your-username your-token rhoim-test@123
+#
+# Note: root-password is optional (defaults to "rhoim-test@123" for testing)
 #
 # Resource Tags:
 #   All resources are tagged with:
@@ -41,6 +43,7 @@ AZ=${2:-us-east-1a}
 ORG_ID=${3:-}
 USERNAME=${4:-}
 TOKEN=${5:-}
+ROOT_PASSWORD=${6:-rhoim-test@123}  # Default password for testing (includes symbol)
 IMAGE_NAME="localhost/rhoim-bootc-nvidia:latest"
 VOLUME_SIZE=50  # Minimum 50GB as per CLOUD_DEPLOYMENT.md
 TIMESTAMP=$(date +%Y%m%d-%H%M%S)  # Timestamp for resource naming and tagging
@@ -248,7 +251,31 @@ sudo umount "$MOUNT_POINT"
 sudo rmdir "$MOUNT_POINT"
 echo -e "${GREEN}✅ SSH keys injection complete${NC}"
 
-# Step 6: Inject Registry Credentials (if provided)
+# Step 6: Inject Root Password
+echo ""
+echo "=== Step 6: Injecting Root Password ==="
+# Find root partition (usually the largest partition)
+ROOT_PARTITION=$(lsblk -rno NAME,TYPE,SIZE "$DEVICE_PATH" | grep part | sort -k3 -h | tail -1 | awk '{print "/dev/"$1}')
+echo "Root partition: $ROOT_PARTITION"
+
+# Use the inject script
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [ -f "$SCRIPT_DIR/inject-root-password.sh" ]; then
+    if sudo "$SCRIPT_DIR/inject-root-password.sh" \
+        "$ROOT_PARTITION" \
+        "$ROOT_PASSWORD"; then
+        echo -e "${GREEN}✅ Root password injected${NC}"
+        echo "Root password set to: $ROOT_PASSWORD"
+    else
+        echo -e "${RED}❌ Error: Failed to inject root password${NC}"
+        echo "You may need to set the password manually after boot"
+    fi
+else
+    echo -e "${YELLOW}Warning: inject-root-password.sh not found${NC}"
+    echo "Password will need to be set manually after boot"
+fi
+
+# Step 7: Inject Registry Credentials (if provided)
 if [ -n "$ORG_ID" ] && [ -n "$USERNAME" ] && [ -n "$TOKEN" ]; then
     echo ""
     echo "=== Step 5: Injecting Registry Credentials ==="
@@ -293,7 +320,7 @@ else
     echo "  ./scripts/inject-registry-credentials.sh <device> <org-id> <username> <token>"
 fi
 
-# Step 7: Detach Volume
+# Step 8: Detach Volume
 echo ""
 echo "=== Step 7: Detaching Volume ==="
 aws ec2 detach-volume \
@@ -303,7 +330,7 @@ aws ec2 detach-volume \
 aws ec2 wait volume-available --volume-ids "$VOLUME_ID" --region "$REGION"
 echo -e "${GREEN}✅ Volume detached${NC}"
 
-# Step 8: Create Snapshot
+# Step 9: Create Snapshot
 echo ""
 echo "=== Step 8: Creating Snapshot ==="
 SNAPSHOT_NAME="rhoim-bootc-ami-snapshot-${TIMESTAMP}"
@@ -326,7 +353,7 @@ aws ec2 wait snapshot-completed \
     --snapshot-ids "$SNAPSHOT_ID"
 echo -e "${GREEN}✅ Snapshot created${NC}"
 
-# Step 9: Create AMI with UEFI Boot Mode (CRITICAL)
+# Step 10: Create AMI with UEFI Boot Mode (CRITICAL)
 echo ""
 echo "=== Step 9: Creating AMI with UEFI Boot Mode ==="
 echo -e "${YELLOW}⚠️  CRITICAL: Setting --boot-mode uefi (required for bootc images)${NC}"
@@ -373,7 +400,7 @@ if [ "$BOOT_MODE" != "uefi" ]; then
 fi
 echo -e "${GREEN}✅ Boot mode verified: $BOOT_MODE${NC}"
 
-# Step 9: Verify ENA Support (already enabled during AMI creation)
+# Step 11: Verify ENA Support (already enabled during AMI creation)
 echo ""
 echo "=== Step 9: Verifying ENA Support ==="
 echo "ENA support was enabled during AMI creation (required for enhanced networking on certain instance types)"
