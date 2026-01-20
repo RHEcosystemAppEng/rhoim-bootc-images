@@ -131,6 +131,17 @@ RUN --mount=type=secret,id=rhsm,target=/tmp/rhsm.conf \
     echo "✅ NVIDIA drivers installed successfully" && \
     echo "Verifying installation..." && \
     rpm -q nvidia-driver nvidia-driver-cuda && \
+    echo "=== Checking for NVIDIA kernel modules ===" && \
+    KERNEL_VERSION=$(uname -r) && \
+    echo "Build kernel version: ${KERNEL_VERSION}" && \
+    echo "Checking for modules in /lib/modules/${KERNEL_VERSION}:" && \
+    find /lib/modules/${KERNEL_VERSION} -name "nvidia.ko*" 2>/dev/null | head -5 || echo "No nvidia.ko found" && \
+    echo "Checking for modules in /usr/lib/modules:" && \
+    find /usr/lib/modules -name "nvidia.ko*" 2>/dev/null | head -5 || echo "No nvidia.ko found in /usr/lib/modules" && \
+    echo "Checking modinfo:" && \
+    modinfo nvidia 2>&1 | head -10 || echo "modinfo nvidia failed" && \
+    echo "Checking DKMS status:" && \
+    dkms status 2>&1 | grep -i nvidia || echo "No NVIDIA modules in DKMS" && \
     dnf clean all
 
 # Remove RHEL repo files and entitlements after all package installations are complete
