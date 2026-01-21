@@ -229,32 +229,50 @@ fi
 
 # Create .ssh directory and inject authorized_keys
 # In bootc/ostree, /root is a symlink to /var/roothome
-# /var is a writable overlay that persists, so we write to /var/roothome/.ssh
+# /var is a fresh writable overlay at boot, so we need to:
+# 1. Write SSH keys to /usr/share/roothome/.ssh in the deployment directory (persistent)
+# 2. Create tmpfiles.d entry to copy keys to /var/roothome/.ssh at boot (runtime)
 echo "Injecting SSH keys into /root/.ssh/authorized_keys (via /var/roothome)..."
 
-# Write to /var/roothome/.ssh (the actual location, since /root -> /var/roothome)
-sudo mkdir -p "$MOUNT_POINT/var/roothome/.ssh"
-sudo cp "$SSH_KEY_ABS" "$MOUNT_POINT/var/roothome/.ssh/authorized_keys"
-sudo chmod 600 "$MOUNT_POINT/var/roothome/.ssh/authorized_keys"
-sudo chmod 700 "$MOUNT_POINT/var/roothome/.ssh"
-
-# Also write to ostree deployment directory to ensure it persists across deployments
+# Find ostree deployment directory
 DEPLOY_DIR=$(sudo find "$MOUNT_POINT/ostree/deploy/default/deploy" -maxdepth 1 -type d -name "*.0" 2>/dev/null | head -1)
-if [ -n "$DEPLOY_DIR" ]; then
-    echo "Also writing to deployment directory: $DEPLOY_DIR"
-    sudo mkdir -p "$DEPLOY_DIR/var/roothome/.ssh"
-    sudo cp "$SSH_KEY_ABS" "$DEPLOY_DIR/var/roothome/.ssh/authorized_keys"
-    sudo chmod 600 "$DEPLOY_DIR/var/roothome/.ssh/authorized_keys"
-    sudo chmod 700 "$DEPLOY_DIR/var/roothome/.ssh"
+if [ -z "$DEPLOY_DIR" ]; then
+    echo -e "${RED}Error: Could not find ostree deployment directory${NC}"
+    sudo umount "$MOUNT_POINT" 2>/dev/null || true
+    sudo rmdir "$MOUNT_POINT" 2>/dev/null || true
+    exit 1
 fi
 
+echo "Found deployment directory: $DEPLOY_DIR"
+
+# Write SSH keys to /usr/share/roothome/.ssh in deployment directory (persistent location)
+# This is similar to how registry credentials are stored in /usr/share/rhoim
+sudo mkdir -p "$DEPLOY_DIR/usr/share/roothome/.ssh"
+sudo cp "$SSH_KEY_ABS" "$DEPLOY_DIR/usr/share/roothome/.ssh/authorized_keys"
+sudo chmod 600 "$DEPLOY_DIR/usr/share/roothome/.ssh/authorized_keys"
+sudo chmod 700 "$DEPLOY_DIR/usr/share/roothome/.ssh"
+
+# Create tmpfiles.d configuration to copy SSH keys from /usr/share/roothome to /var/roothome at boot
+# This ensures keys are available at runtime even though /var is a fresh overlay
+echo "Creating tmpfiles.d configuration for SSH keys..."
+sudo mkdir -p "$MOUNT_POINT/etc/tmpfiles.d"
+sudo tee "$MOUNT_POINT/etc/tmpfiles.d/roothome-ssh.conf" > /dev/null <<EOF
+# Create /var/roothome/.ssh directory (writable overlay)
+d /var/roothome/.ssh 0700 root root -
+
+# Copy SSH keys from persistent location (/usr/share/roothome) to runtime location (/var/roothome) at boot
+# This is needed because /var is a fresh writable overlay in bootc/ostree
+C /var/roothome/.ssh/authorized_keys 0600 root root /usr/share/roothome/.ssh/authorized_keys
+EOF
+
 # Verify SSH keys were written
-if sudo test -f "$MOUNT_POINT/var/roothome/.ssh/authorized_keys"; then
+if sudo test -f "$DEPLOY_DIR/usr/share/roothome/.ssh/authorized_keys"; then
     echo -e "${GREEN}✅ SSH keys injected${NC}"
-    echo "SSH keys file: $MOUNT_POINT/var/roothome/.ssh/authorized_keys"
-    echo "Key count: $(sudo wc -l < "$MOUNT_POINT/var/roothome/.ssh/authorized_keys")"
-    if [ -n "$DEPLOY_DIR" ] && sudo test -f "$DEPLOY_DIR/var/roothome/.ssh/authorized_keys"; then
-        echo -e "${GREEN}✅ SSH keys also written to deployment directory${NC}"
+    echo "SSH keys file: $DEPLOY_DIR/usr/share/roothome/.ssh/authorized_keys"
+    KEY_COUNT=$(sudo wc -l < "$DEPLOY_DIR/usr/share/roothome/.ssh/authorized_keys" 2>/dev/null || echo "0")
+    echo "Key count: $KEY_COUNT"
+    if sudo test -f "$MOUNT_POINT/etc/tmpfiles.d/roothome-ssh.conf"; then
+        echo -e "${GREEN}✅ tmpfiles.d configuration created${NC}"
     fi
 else
     echo -e "${RED}❌ Error: Failed to inject SSH keys${NC}"
