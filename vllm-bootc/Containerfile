@@ -156,22 +156,8 @@ RUN rm -f /etc/yum.repos.d/rhel9-baseos.repo /etc/yum.repos.d/rhel9-appstream.re
 # Enable and start podman socket
 RUN systemctl enable podman.socket
 
-# =============================================================================
-# SSH Configuration for Testing
-# =============================================================================
-# Enable password-based authentication for testing purposes
-# Note: Root password will be injected during AMI creation (not baked into image)
-RUN systemctl enable sshd.service && \
-    # Configure SSH to allow password authentication
-    sed -i 's/#PasswordAuthentication yes/PasswordAuthentication yes/' /etc/ssh/sshd_config && \
-    sed -i 's/PasswordAuthentication no/PasswordAuthentication yes/' /etc/ssh/sshd_config && \
-    sed -i 's/#PermitRootLogin prohibit-password/PermitRootLogin yes/' /etc/ssh/sshd_config && \
-    sed -i 's/PermitRootLogin no/PermitRootLogin yes/' /etc/ssh/sshd_config && \
-    # Generate SSH host keys if they don't exist
-    ssh-keygen -A -f /etc/ssh || true && \
-    # Ensure SSH directory exists
-    mkdir -p /etc/ssh && \
-    chmod 755 /etc/ssh
+# SSH service is enabled by default in RHEL bootc base image
+# SSH configuration will be handled at runtime if needed
 
 # Copy systemd service and configuration files
 COPY etc/ /etc/
