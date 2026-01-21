@@ -92,6 +92,40 @@ module "network" {
   source = "../modules/aws-network"
 }
 
+# IAM role for SSM Session Manager access
+resource "aws_iam_role" "ssm_role" {
+  name = "${local.instance_name}-ssm-role"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Action = "sts:AssumeRole"
+        Effect = "Allow"
+        Principal = {
+          Service = "ec2.amazonaws.com"
+        }
+      }
+    ]
+  })
+
+  tags = local.common_tags
+}
+
+# Attach AWS managed policy for SSM
+resource "aws_iam_role_policy_attachment" "ssm_managed_instance_core" {
+  role       = aws_iam_role.ssm_role.name
+  policy_arn = "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"
+}
+
+# Instance profile to attach the role to the instance
+resource "aws_iam_instance_profile" "ssm_profile" {
+  name = "${local.instance_name}-ssm-profile"
+  role = aws_iam_role.ssm_role.name
+
+  tags = local.common_tags
+}
+
 # Security group for the GPU host instance
 resource "aws_security_group" "gpu_host" {
   name        = "${local.instance_name}-sg"
@@ -137,6 +171,8 @@ resource "aws_instance" "gpu_host" {
   subnet_id                   = module.network.first_subnet_id
   vpc_security_group_ids      = [aws_security_group.gpu_host.id]
   associate_public_ip_address = true
+
+  iam_instance_profile = aws_iam_instance_profile.ssm_profile.name
 
   key_name = var.key_name
 

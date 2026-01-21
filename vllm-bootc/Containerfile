@@ -43,7 +43,11 @@ RUN --mount=type=secret,id=rhsm,target=/tmp/rhsm.conf \
       'sslclientcert=/etc/pki/entitlement/cert.pem' \
       'metadata_expire=86400' \
       'enabled_metadata=1' > /etc/yum.repos.d/rhel9-appstream.repo && \
-    dnf -v -y install podman skopeo systemd openssh-server openssh-clients passwd amazon-ssm-agent && \
+    dnf -v -y install podman skopeo systemd openssh-server openssh-clients passwd && \
+    # Install AWS SSM agent from AWS repository
+    dnf install -y https://s3.amazonaws.com/ec2-downloads-windows/SSMAgent/latest/linux_amd64/amazon-ssm-agent.rpm || \
+    (curl -o /tmp/amazon-ssm-agent.rpm https://s3.amazonaws.com/ec2-downloads-windows/SSMAgent/latest/linux_amd64/amazon-ssm-agent.rpm && \
+     dnf install -y /tmp/amazon-ssm-agent.rpm && rm -f /tmp/amazon-ssm-agent.rpm) && \
     dnf clean all
 
 # =============================================================================
