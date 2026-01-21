@@ -43,7 +43,7 @@ RUN --mount=type=secret,id=rhsm,target=/tmp/rhsm.conf \
       'sslclientcert=/etc/pki/entitlement/cert.pem' \
       'metadata_expire=86400' \
       'enabled_metadata=1' > /etc/yum.repos.d/rhel9-appstream.repo && \
-    dnf -v -y install podman skopeo systemd openssh-server openssh-clients passwd && \
+    dnf -v -y install podman skopeo systemd openssh-server openssh-clients passwd amazon-ssm-agent && \
     dnf clean all
 
 # =============================================================================
@@ -191,6 +191,7 @@ RUN chmod +x /usr/local/bin/nvidia-container-setup.sh && \
     # Create podman auth directory for registry credentials (required for --authfile)
     mkdir -p /root/.config/containers && \
     # Enable services
+    systemctl enable amazon-ssm-agent && \
     systemctl enable nvidia-container-setup.service && \
     systemctl enable podman-registry-login.service && \
     systemctl enable rhoim-vllm.service
