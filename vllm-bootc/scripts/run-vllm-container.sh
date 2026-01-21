@@ -76,7 +76,11 @@ fi
 NVIDIA_ENV=""
 if [ -n "$GPU_DEVICE" ]; then
     # Make all GPUs visible to container
-    NVIDIA_ENV="-e NVIDIA_VISIBLE_DEVICES=all -e NVIDIA_DRIVER_CAPABILITIES=compute,utility"
+    # CUDA_VISIBLE_DEVICES is needed for vLLM to detect GPUs
+    # NVIDIA_VISIBLE_DEVICES is for NVIDIA Container Toolkit
+    NVIDIA_ENV="-e NVIDIA_VISIBLE_DEVICES=all -e NVIDIA_DRIVER_CAPABILITIES=compute,utility -e CUDA_VISIBLE_DEVICES=0"
+    # Also explicitly set device type for vLLM
+    NVIDIA_ENV="${NVIDIA_ENV} -e VLLM_DEVICE_TYPE=cuda"
 fi
 
 exec /usr/bin/podman run \

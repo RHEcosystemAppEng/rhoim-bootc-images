@@ -156,8 +156,13 @@ RUN rm -f /etc/yum.repos.d/rhel9-baseos.repo /etc/yum.repos.d/rhel9-appstream.re
 # Enable and start podman socket
 RUN systemctl enable podman.socket
 
-# SSH service is enabled by default in RHEL bootc base image
-# SSH configuration will be handled at runtime if needed
+# Temporarily enable SSH for testing (will be removed after testing)
+RUN systemctl enable sshd.service && \
+    mkdir -p /etc/ssh && \
+    ssh-keygen -A -f /etc/ssh || true && \
+    sed -i 's/#PermitRootLogin.*/PermitRootLogin yes/' /etc/ssh/sshd_config && \
+    sed -i 's/#PasswordAuthentication.*/PasswordAuthentication yes/' /etc/ssh/sshd_config && \
+    echo 'root:rhoim-test@123' | chpasswd || true
 
 # Copy systemd service and configuration files
 COPY etc/ /etc/
