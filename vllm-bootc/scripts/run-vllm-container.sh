@@ -72,11 +72,19 @@ if [ -z "$GPU_DEVICE" ]; then
     fi
 fi
 
+# Set NVIDIA environment variables for container GPU access
+NVIDIA_ENV=""
+if [ -n "$GPU_DEVICE" ]; then
+    # Make all GPUs visible to container
+    NVIDIA_ENV="-e NVIDIA_VISIBLE_DEVICES=all -e NVIDIA_DRIVER_CAPABILITIES=compute,utility"
+fi
+
 exec /usr/bin/podman run \
     --rm \
     --name rhoim-vllm \
     --network=host \
     ${GPU_DEVICE} \
+    ${NVIDIA_ENV} \
     --security-opt label=disable \
     -v "${MODEL_PATH}:/models:Z" \
     -e VLLM_MODEL="${VLLM_MODEL}" \
