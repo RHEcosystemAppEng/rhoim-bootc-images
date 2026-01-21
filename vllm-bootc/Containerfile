@@ -180,7 +180,8 @@ COPY etc/ /etc/
 COPY scripts/nvidia-container-setup.sh /usr/local/bin/nvidia-container-setup.sh
 COPY scripts/run-vllm-container.sh /usr/local/bin/run-vllm-container.sh
 COPY scripts/podman-registry-login.sh /usr/local/bin/podman-registry-login.sh
-COPY scripts/check-cuda-compatibility.sh /usr/local/bin/check-cuda-compatibility.sh
+# Copy check-cuda-compatibility.sh if it exists (optional script)
+COPY scripts/check-cuda-compatibility.sh* /usr/local/bin/ || true
 
 # Create template file in base image at /usr/share/rhoim (read-only base filesystem)
 # This will be copied to /var/lib/rhoim at boot by tmpfiles.d
