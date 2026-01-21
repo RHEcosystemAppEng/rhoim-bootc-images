@@ -127,13 +127,9 @@ RUN --mount=type=secret,id=rhsm,target=/tmp/rhsm.conf \
     echo "Installing DKMS..." && \
     dnf -y install dkms && \
     echo "Installing NVIDIA driver packages from CUDA repository..." && \
-    echo "Installing driver 570 for CUDA 12.x compatibility..." && \
-    echo "Checking available driver versions..." && \
-    dnf list available nvidia-driver* 2>/dev/null | grep -E 'nvidia-driver-[0-9]+' | head -5 || echo "Checking driver packages..." && \
-    echo "Attempting to install driver 570..." && \
-    (dnf -y install nvidia-driver-570 nvidia-driver-cuda-570 2>&1 || \
-     (echo "Driver 570 not available, trying 550..." && dnf -y install nvidia-driver-550 nvidia-driver-cuda-550 2>&1) || \
-     (echo "Driver 550 not available, falling back to latest..." && dnf -y install nvidia-driver nvidia-driver-cuda 2>&1)) && \
+    echo "Using DNF module system (same as tester terraform) for driver 570..." && \
+    echo "This approach handles dependencies and kernel modules better than direct package install" && \
+    dnf -y module install nvidia-driver:570 && \
     echo "Installed driver version:" && \
     rpm -q nvidia-driver nvidia-driver-cuda 2>/dev/null | head -2 || echo "Driver packages installed" && \
     echo "✅ NVIDIA drivers installed successfully" && \
