@@ -8,12 +8,12 @@
 # 5. Volume size is 50GB minimum
 # 6. All resources (Volume, Snapshot, AMI) are tagged for easy cleanup
 #
-# Usage: ./create-bootc-ami.sh [region] [availability-zone] [org-id] [username] [token] [root-password]
+# Usage: ./create-bootc-ami.sh [region] [availability-zone] [org-id] [username] [token]
 #
 # Example:
-#   ./create-bootc-ami.sh us-east-1 us-east-1a your-org-id your-username your-token rhoim-test@123
+#   ./create-bootc-ami.sh us-east-1 us-east-1a your-org-id your-username your-token
 #
-# Note: root-password is optional (defaults to "rhoim-test@123" for testing)
+# Note: SSH keys will be injected from ~/.ssh/authorized_keys
 #
 # Resource Tags:
 #   All resources are tagged with:
@@ -43,7 +43,7 @@ AZ=${2:-us-east-1a}
 ORG_ID=${3:-}
 USERNAME=${4:-}
 TOKEN=${5:-}
-ROOT_PASSWORD=${6:-rhoim-test@123}  # Default password for testing (includes symbol)
+# SSH keys are used for authentication (no password needed)
 IMAGE_NAME="localhost/rhoim-bootc-nvidia:latest"
 VOLUME_SIZE=50  # Minimum 50GB as per CLOUD_DEPLOYMENT.md
 TIMESTAMP=$(date +%Y%m%d-%H%M%S)  # Timestamp for resource naming and tagging
@@ -228,17 +228,34 @@ if ! sudo mount "$ROOT_PARTITION" "$MOUNT_POINT"; then
 fi
 
 # Create .ssh directory and inject authorized_keys
-echo "Injecting SSH keys into /root/.ssh/authorized_keys..."
-sudo mkdir -p "$MOUNT_POINT/root/.ssh"
-sudo cp "$SSH_KEY_ABS" "$MOUNT_POINT/root/.ssh/authorized_keys"
-sudo chmod 600 "$MOUNT_POINT/root/.ssh/authorized_keys"
-sudo chmod 700 "$MOUNT_POINT/root/.ssh"
+# In bootc/ostree, /root is a symlink to /var/roothome
+# /var is a writable overlay that persists, so we write to /var/roothome/.ssh
+echo "Injecting SSH keys into /root/.ssh/authorized_keys (via /var/roothome)..."
 
-# Verify SSH keys were written (use sudo for file check since we're checking root's files)
-if sudo test -f "$MOUNT_POINT/root/.ssh/authorized_keys"; then
+# Write to /var/roothome/.ssh (the actual location, since /root -> /var/roothome)
+sudo mkdir -p "$MOUNT_POINT/var/roothome/.ssh"
+sudo cp "$SSH_KEY_ABS" "$MOUNT_POINT/var/roothome/.ssh/authorized_keys"
+sudo chmod 600 "$MOUNT_POINT/var/roothome/.ssh/authorized_keys"
+sudo chmod 700 "$MOUNT_POINT/var/roothome/.ssh"
+
+# Also write to ostree deployment directory to ensure it persists across deployments
+DEPLOY_DIR=$(sudo find "$MOUNT_POINT/ostree/deploy/default/deploy" -maxdepth 1 -type d -name "*.0" 2>/dev/null | head -1)
+if [ -n "$DEPLOY_DIR" ]; then
+    echo "Also writing to deployment directory: $DEPLOY_DIR"
+    sudo mkdir -p "$DEPLOY_DIR/var/roothome/.ssh"
+    sudo cp "$SSH_KEY_ABS" "$DEPLOY_DIR/var/roothome/.ssh/authorized_keys"
+    sudo chmod 600 "$DEPLOY_DIR/var/roothome/.ssh/authorized_keys"
+    sudo chmod 700 "$DEPLOY_DIR/var/roothome/.ssh"
+fi
+
+# Verify SSH keys were written
+if sudo test -f "$MOUNT_POINT/var/roothome/.ssh/authorized_keys"; then
     echo -e "${GREEN}✅ SSH keys injected${NC}"
-    echo "SSH keys file: $MOUNT_POINT/root/.ssh/authorized_keys"
-    echo "Key count: $(sudo wc -l < "$MOUNT_POINT/root/.ssh/authorized_keys")"
+    echo "SSH keys file: $MOUNT_POINT/var/roothome/.ssh/authorized_keys"
+    echo "Key count: $(sudo wc -l < "$MOUNT_POINT/var/roothome/.ssh/authorized_keys")"
+    if [ -n "$DEPLOY_DIR" ] && sudo test -f "$DEPLOY_DIR/var/roothome/.ssh/authorized_keys"; then
+        echo -e "${GREEN}✅ SSH keys also written to deployment directory${NC}"
+    fi
 else
     echo -e "${RED}❌ Error: Failed to inject SSH keys${NC}"
     sudo umount "$MOUNT_POINT" 2>/dev/null || true
@@ -251,34 +268,10 @@ sudo umount "$MOUNT_POINT"
 sudo rmdir "$MOUNT_POINT"
 echo -e "${GREEN}✅ SSH keys injection complete${NC}"
 
-# Step 6: Inject Root Password
-echo ""
-echo "=== Step 6: Injecting Root Password ==="
-# Find root partition (usually the largest partition)
-ROOT_PARTITION=$(lsblk -rno NAME,TYPE,SIZE "$DEVICE_PATH" | grep part | sort -k3 -h | tail -1 | awk '{print "/dev/"$1}')
-echo "Root partition: $ROOT_PARTITION"
-
-# Use the inject script
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-if [ -f "$SCRIPT_DIR/inject-root-password.sh" ]; then
-    if sudo "$SCRIPT_DIR/inject-root-password.sh" \
-        "$ROOT_PARTITION" \
-        "$ROOT_PASSWORD"; then
-        echo -e "${GREEN}✅ Root password injected${NC}"
-        echo "Root password set to: $ROOT_PASSWORD"
-    else
-        echo -e "${RED}❌ Error: Failed to inject root password${NC}"
-        echo "You may need to set the password manually after boot"
-    fi
-else
-    echo -e "${YELLOW}Warning: inject-root-password.sh not found${NC}"
-    echo "Password will need to be set manually after boot"
-fi
-
-# Step 7: Inject Registry Credentials (if provided)
+# Step 6: Inject Registry Credentials (if provided)
 if [ -n "$ORG_ID" ] && [ -n "$USERNAME" ] && [ -n "$TOKEN" ]; then
     echo ""
-    echo "=== Step 5: Injecting Registry Credentials ==="
+    echo "=== Step 6: Injecting Registry Credentials ==="
     
     # Find root partition (usually the largest partition)
     ROOT_PARTITION=$(lsblk -rno NAME,TYPE,SIZE "$DEVICE_PATH" | grep part | sort -k3 -h | tail -1 | awk '{print "/dev/"$1}')
@@ -315,12 +308,12 @@ if [ -n "$ORG_ID" ] && [ -n "$USERNAME" ] && [ -n "$TOKEN" ]; then
     fi
 else
     echo ""
-    echo "=== Step 5: Skipping Registry Credentials Injection ==="
+    echo "=== Step 6: Skipping Registry Credentials Injection ==="
     echo "No credentials provided. You can inject them later using:"
     echo "  ./scripts/inject-registry-credentials.sh <device> <org-id> <username> <token>"
 fi
 
-# Step 8: Detach Volume
+# Step 7: Detach Volume
 echo ""
 echo "=== Step 7: Detaching Volume ==="
 aws ec2 detach-volume \
@@ -330,7 +323,7 @@ aws ec2 detach-volume \
 aws ec2 wait volume-available --volume-ids "$VOLUME_ID" --region "$REGION"
 echo -e "${GREEN}✅ Volume detached${NC}"
 
-# Step 9: Create Snapshot
+# Step 8: Create Snapshot
 echo ""
 echo "=== Step 8: Creating Snapshot ==="
 SNAPSHOT_NAME="rhoim-bootc-ami-snapshot-${TIMESTAMP}"
@@ -446,5 +439,5 @@ echo "    --key-name your-key-pair \\"
 echo "    --security-group-ids sg-xxxxxxxxx \\"
 echo "    --subnet-id subnet-xxxxxxxxx"
 echo ""
-echo "Note: SSH access is configured with keys from $SSH_KEY_FILE"
+echo "Note: SSH access is configured with key-based authentication using keys from $SSH_KEY_FILE"
 echo "      Use the same key pair when launching the instance"

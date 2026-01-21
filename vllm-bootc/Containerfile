@@ -160,15 +160,15 @@ RUN rm -f /etc/yum.repos.d/rhel9-baseos.repo /etc/yum.repos.d/rhel9-appstream.re
 # Enable and start podman socket
 RUN systemctl enable podman.socket
 
-# Temporarily enable SSH for testing (will be removed after testing)
+# Enable SSH and configure for key-based authentication
+# SSH keys will be injected during AMI creation via create-bootc-ami.sh
 RUN systemctl enable sshd.service && \
     mkdir -p /etc/ssh && \
     ssh-keygen -A || true && \
-    sed -i 's/#PermitRootLogin.*/PermitRootLogin yes/' /etc/ssh/sshd_config 2>/dev/null || true && \
-    sed -i 's/^PermitRootLogin.*/PermitRootLogin yes/' /etc/ssh/sshd_config 2>/dev/null || true && \
-    sed -i 's/#PasswordAuthentication.*/PasswordAuthentication yes/' /etc/ssh/sshd_config 2>/dev/null || true && \
-    sed -i 's/^PasswordAuthentication.*/PasswordAuthentication yes/' /etc/ssh/sshd_config 2>/dev/null || true && \
-    echo 'root:rhoim-test@123' | chpasswd || true
+    sed -i 's/#PermitRootLogin.*/PermitRootLogin prohibit-password/' /etc/ssh/sshd_config 2>/dev/null || true && \
+    sed -i 's/^PermitRootLogin.*/PermitRootLogin prohibit-password/' /etc/ssh/sshd_config 2>/dev/null || true && \
+    sed -i 's/#PasswordAuthentication.*/PasswordAuthentication no/' /etc/ssh/sshd_config 2>/dev/null || true && \
+    sed -i 's/^PasswordAuthentication.*/PasswordAuthentication no/' /etc/ssh/sshd_config 2>/dev/null || true
 
 # Copy systemd service and configuration files
 COPY etc/ /etc/
