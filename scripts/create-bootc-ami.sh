@@ -195,12 +195,15 @@ if [ ! -f "$SSH_KEY_ABS" ]; then
 fi
 
 # Mount the SSH key file into the container and use bootc's official --root-ssh-authorized-keys flag
+# Copy the key file into the container first, then run bootc install
+echo "Mounting SSH key file: $SSH_KEY_ABS -> /host-ssh-key:ro in container"
+echo "Using bootc install --root-ssh-authorized-keys flag (official method)"
 sudo podman run --rm --privileged --pid=host \
     --device-cgroup-rule='b *:* rmw' \
     -v /dev:/dev \
-    -v "$SSH_KEY_ABS:/tmp/authorized_keys:ro" \
+    -v "$SSH_KEY_ABS:/host-ssh-key:ro" \
     "$IMAGE_NAME" \
-    bootc install to-disk --wipe --filesystem ext4 --karg console=ttyS0,115200n8 --karg root=LABEL=root --root-ssh-authorized-keys /tmp/authorized_keys "$DEVICE_PATH"
+    sh -c "cp /host-ssh-key /tmp/authorized_keys && chmod 644 /tmp/authorized_keys && bootc install to-disk --wipe --filesystem ext4 --karg console=ttyS0,115200n8 --karg root=LABEL=root --root-ssh-authorized-keys /tmp/authorized_keys \"$DEVICE_PATH\""
 
 echo -e "${GREEN}✅ Bootc image installed${NC}"
 
