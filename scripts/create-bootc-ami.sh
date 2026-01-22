@@ -268,7 +268,8 @@ fi
 if sudo test -f "$MOUNT_POINT/var/roothome/.ssh/authorized_keys"; then
     echo -e "${GREEN}✅ SSH keys injected${NC}"
     echo "SSH keys file: $MOUNT_POINT/var/roothome/.ssh/authorized_keys"
-    echo "Key count: $(sudo wc -l < "$MOUNT_POINT/var/roothome/.ssh/authorized_keys")"
+    KEY_COUNT=$(sudo sh -c "wc -l < \"$MOUNT_POINT/var/roothome/.ssh/authorized_keys\"")
+    echo "Key count: $KEY_COUNT"
     if [ -n "$DEPLOY_DIR" ] && sudo test -f "$DEPLOY_DIR/var/roothome/.ssh/authorized_keys"; then
         echo -e "${GREEN}✅ SSH keys also written to deployment directory${NC}"
     fi
