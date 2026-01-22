@@ -285,6 +285,11 @@ sudo umount "$MOUNT_POINT"
 sudo rmdir "$MOUNT_POINT"
 echo -e "${GREEN}✅ SSH keys injection complete${NC}"
 
+# Sync filesystem to ensure all writes are flushed before detaching volume
+echo "Syncing filesystem to ensure all writes are persisted..."
+sync
+echo -e "${GREEN}✅ Filesystem synced${NC}"
+
 # Step 6: Inject Registry Credentials (if provided)
 if [ -n "$ORG_ID" ] && [ -n "$USERNAME" ] && [ -n "$TOKEN" ]; then
     echo ""
