@@ -269,7 +269,7 @@ EOF
 if sudo test -f "$DEPLOY_DIR/usr/share/roothome/.ssh/authorized_keys"; then
     echo -e "${GREEN}✅ SSH keys injected${NC}"
     echo "SSH keys file: $DEPLOY_DIR/usr/share/roothome/.ssh/authorized_keys"
-    KEY_COUNT=$(sudo wc -l < "$DEPLOY_DIR/usr/share/roothome/.ssh/authorized_keys" 2>/dev/null || echo "0")
+    KEY_COUNT=$(sudo cat "$DEPLOY_DIR/usr/share/roothome/.ssh/authorized_keys" 2>/dev/null | wc -l || echo "0")
     echo "Key count: $KEY_COUNT"
     if sudo test -f "$MOUNT_POINT/etc/tmpfiles.d/roothome-ssh.conf"; then
         echo -e "${GREEN}✅ tmpfiles.d configuration created${NC}"
