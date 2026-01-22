@@ -196,10 +196,12 @@ fi
 
 # Copy SSH key to a temporary location with readable permissions for container
 # The original file has 600 permissions which the container can't read
+# Use sudo to create the temp file with root ownership so container can read it
 TEMP_SSH_KEY="/tmp/bootc-ssh-key-$$"
-cp "$SSH_KEY_ABS" "$TEMP_SSH_KEY"
-chmod 644 "$TEMP_SSH_KEY"
-trap "rm -f $TEMP_SSH_KEY" EXIT
+sudo cp "$SSH_KEY_ABS" "$TEMP_SSH_KEY"
+sudo chmod 644 "$TEMP_SSH_KEY"
+sudo chown root:root "$TEMP_SSH_KEY"
+trap "sudo rm -f $TEMP_SSH_KEY" EXIT
 
 # Mount the SSH key file into the container and use bootc's official --root-ssh-authorized-keys flag
 # Copy the key file into the container first, then run bootc install
