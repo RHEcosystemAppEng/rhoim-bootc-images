@@ -205,16 +205,17 @@ trap "sudo rm -f $TEMP_SSH_KEY" EXIT
 
 # Mount the SSH key file into the container and use bootc's official --root-ssh-authorized-keys flag
 # The file must be accessible inside the container at the path we specify
+# Use /root/.ssh/authorized_keys (standard location) instead of /tmp
 echo "Mounting SSH key file: $TEMP_SSH_KEY -> /host-ssh-key:ro in container"
 echo "Using bootc install --root-ssh-authorized-keys flag (official method)"
-# Copy file into container and verify it's readable before passing to bootc
-# Use absolute path inside container for --root-ssh-authorized-keys
+echo "Placing SSH key in /root/.ssh/authorized_keys (standard location)"
+# Copy file into container at standard SSH location and verify it's readable before passing to bootc
 sudo podman run --rm --privileged --pid=host \
     --device-cgroup-rule='b *:* rmw' \
     -v /dev:/dev \
     -v "$TEMP_SSH_KEY:/host-ssh-key:ro" \
     "$IMAGE_NAME" \
-    bash -c "if [ ! -f /host-ssh-key ]; then echo 'ERROR: SSH key file not found at /host-ssh-key'; exit 1; fi && echo 'Copying SSH key to /tmp/authorized_keys in container...' && cp /host-ssh-key /tmp/authorized_keys && chmod 644 /tmp/authorized_keys && echo 'Verifying file is readable...' && cat /tmp/authorized_keys | head -c 50 && echo '...' && echo 'Running bootc install with --root-ssh-authorized-keys flag...' && bootc install to-disk --wipe --filesystem ext4 --karg console=ttyS0,115200n8 --karg root=LABEL=root --root-ssh-authorized-keys /tmp/authorized_keys $DEVICE_PATH"
+    bash -c "if [ ! -f /host-ssh-key ]; then echo 'ERROR: SSH key file not found at /host-ssh-key'; exit 1; fi && echo 'Creating /root/.ssh directory...' && mkdir -p /root/.ssh && echo 'Copying SSH key to /root/.ssh/authorized_keys...' && cp /host-ssh-key /root/.ssh/authorized_keys && chmod 600 /root/.ssh/authorized_keys && chmod 700 /root/.ssh && echo 'Verifying file is readable...' && cat /root/.ssh/authorized_keys | head -c 50 && echo '...' && echo 'Running bootc install with --root-ssh-authorized-keys flag...' && bootc install to-disk --wipe --filesystem ext4 --karg console=ttyS0,115200n8 --karg root=LABEL=root --root-ssh-authorized-keys /root/.ssh/authorized_keys $DEVICE_PATH"
 
 echo -e "${GREEN}✅ Bootc image installed${NC}"
 
