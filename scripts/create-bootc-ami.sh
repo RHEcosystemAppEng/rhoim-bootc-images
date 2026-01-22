@@ -194,15 +194,56 @@ if [ ! -f "$SSH_KEY_ABS" ]; then
     exit 1
 fi
 
-# Run bootc install from inside the container (required per bootc docs)
-# The container must be run with --privileged, --pid=host, and device access to see block devices
-# Note: SSH keys will be injected AFTER installation (see Step 5) to avoid file access issues
-# bootc automatically detects the container image it's running in, so we don't need --source-imgref
+# Create partition table manually with EFI partition FIRST (required for AWS UEFI)
+# Bootc's default partition order (BIOS boot, EFI, root) may not work with AWS UEFI firmware
+# AWS UEFI expects EFI partition to be the first partition for proper boot detection
+echo "Creating partition table with EFI partition first..."
+sudo sgdisk --clear \
+    --new=1:0:+512M --typecode=1:EF00 --change-name=1:EFI-SYSTEM \
+    --new=2:0:+1M --typecode=2:EF02 --change-name=2:BIOS-BOOT \
+    --new=3:0:0 --typecode=3:8300 --change-name=3:root \
+    "$DEVICE_PATH"
+
+# Refresh partition table
+sudo partprobe "$DEVICE_PATH"
+sleep 2
+
+# Format EFI partition
+EFI_PARTITION="${DEVICE_PATH}p1"
+echo "Formatting EFI partition: $EFI_PARTITION"
+sudo mkfs.vfat -F 32 -n EFI-SYSTEM "$EFI_PARTITION"
+
+# Format root partition
+ROOT_PARTITION="${DEVICE_PATH}p3"
+echo "Formatting root partition: $ROOT_PARTITION"
+sudo mkfs.ext4 -F -L root "$ROOT_PARTITION"
+
+# Mount root partition for bootc install
+MOUNT_POINT="/mnt/bootc-install-$$"
+sudo mkdir -p "$MOUNT_POINT"
+sudo mount "$ROOT_PARTITION" "$MOUNT_POINT"
+
+# Mount EFI partition inside root filesystem (bootc expects it at /boot/efi)
+sudo mkdir -p "$MOUNT_POINT/boot/efi"
+sudo mount "$EFI_PARTITION" "$MOUNT_POINT/boot/efi"
+
+# Run bootc install to-filesystem (allows manual partition control)
+# The container must be run with --privileged, --pid=host, and device access
+# bootc automatically detects the container image it's running in
+# bootc will detect /boot/efi as the EFI partition automatically
+echo "Installing bootc image to filesystem..."
 sudo podman run --rm --privileged --pid=host \
     --device-cgroup-rule='b *:* rmw' \
     -v /dev:/dev \
+    -v "$MOUNT_POINT:/sysroot" \
     "$IMAGE_NAME" \
-    bootc install to-disk --wipe --filesystem ext4 --karg console=ttyS0,115200n8 --karg root=LABEL=root "$DEVICE_PATH"
+    bootc install to-filesystem --karg console=ttyS0,115200n8 --karg root=LABEL=root /sysroot
+
+# Unmount (EFI first, then root)
+sudo umount "$MOUNT_POINT/boot/efi" 2>/dev/null || true
+sudo umount "$MOUNT_POINT" 2>/dev/null || true
+sudo rmdir "$MOUNT_POINT/boot/efi" 2>/dev/null || true
+sudo rmdir "$MOUNT_POINT" 2>/dev/null || true
 
 echo -e "${GREEN}✅ Bootc image installed${NC}"
 
@@ -215,11 +256,11 @@ sudo lsblk -f "$DEVICE_PATH"
 # Verify EFI partition contains bootloader files
 echo ""
 echo "=== Verifying EFI Partition ==="
-# Find EFI partition by label (EFI-SYSTEM) or by size (512M)
+# Find EFI partition by label (EFI-SYSTEM) - should be first partition now
 EFI_PARTITION=$(lsblk -rno NAME,LABEL,SIZE "$DEVICE_PATH" | grep -E 'EFI-SYSTEM|EFI' | awk '{print "/dev/"$1}' | head -1)
 if [ -z "$EFI_PARTITION" ]; then
-    # Try to find EFI partition by size (usually 512M) - second partition
-    EFI_PARTITION=$(lsblk -rno NAME,TYPE,SIZE "$DEVICE_PATH" | grep part | awk 'NR==2 {print "/dev/"$1}')
+    # Try to find EFI partition by size (usually 512M) - first partition
+    EFI_PARTITION=$(lsblk -rno NAME,TYPE,SIZE "$DEVICE_PATH" | grep part | awk 'NR==1 {print "/dev/"$1}')
 fi
 
 if [ -n "$EFI_PARTITION" ]; then
@@ -272,8 +313,12 @@ if [ ! -f "$SSH_KEY_ABS" ]; then
     exit 1
 fi
 
-# Find root partition (usually the largest partition)
-ROOT_PARTITION=$(lsblk -rno NAME,TYPE,SIZE "$DEVICE_PATH" | grep part | sort -k3 -h | tail -1 | awk '{print "/dev/"$1}')
+# Find root partition (should be third partition now, but verify by label)
+ROOT_PARTITION=$(lsblk -rno NAME,LABEL,SIZE "$DEVICE_PATH" | grep -E 'root|ROOT' | awk '{print "/dev/"$1}' | head -1)
+if [ -z "$ROOT_PARTITION" ]; then
+    # Fallback: largest partition (should be root)
+    ROOT_PARTITION=$(lsblk -rno NAME,TYPE,SIZE "$DEVICE_PATH" | grep part | sort -k3 -h | tail -1 | awk '{print "/dev/"$1}')
+fi
 echo "Root partition: $ROOT_PARTITION"
 
 # Create mount point
@@ -340,8 +385,12 @@ if [ -n "$ORG_ID" ] && [ -n "$USERNAME" ] && [ -n "$TOKEN" ]; then
     echo ""
     echo "=== Step 6: Injecting Registry Credentials ==="
     
-    # Find root partition (usually the largest partition)
-    ROOT_PARTITION=$(lsblk -rno NAME,TYPE,SIZE "$DEVICE_PATH" | grep part | sort -k3 -h | tail -1 | awk '{print "/dev/"$1}')
+    # Find root partition (should be third partition now, but verify by label)
+    ROOT_PARTITION=$(lsblk -rno NAME,LABEL,SIZE "$DEVICE_PATH" | grep -E 'root|ROOT' | awk '{print "/dev/"$1}' | head -1)
+    if [ -z "$ROOT_PARTITION" ]; then
+        # Fallback: largest partition (should be root)
+        ROOT_PARTITION=$(lsblk -rno NAME,TYPE,SIZE "$DEVICE_PATH" | grep part | sort -k3 -h | tail -1 | awk '{print "/dev/"$1}')
+    fi
     echo "Root partition: $ROOT_PARTITION"
     
     # Use the inject script
