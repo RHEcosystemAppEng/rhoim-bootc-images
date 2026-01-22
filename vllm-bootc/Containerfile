@@ -2,7 +2,10 @@
 # Bootc Base Image with Podman and NVIDIA CUDA Libraries
 # This image will run the vLLM container using podman on boot
 # =============================================================================
-FROM registry.redhat.io/rhel9/rhel-bootc:latest
+# Pin to specific digest to ensure reproducible builds
+# Digest from working build: sha256:01f60a7eed2563a127553609be01b017f09165a9533827921e7cf0f9d25daf62
+# Created: 2026-01-15 (RHEL 9.7)
+FROM registry.redhat.io/rhel9/rhel-bootc@sha256:01f60a7eed2563a127553609be01b017f09165a9533827921e7cf0f9d25daf62
 
 # Install podman and NVIDIA CUDA libraries dependencies
 # These are needed to run the vLLM CUDA container
