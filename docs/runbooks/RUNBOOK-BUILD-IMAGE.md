@@ -130,7 +130,7 @@ podman build \
   .                             # Build context
 ```
 
-**Important:** Do NOT use `--squash` for bootc images. Bootc requires hardlinks preserved by ostree.
+**Important:** Do NOT use `--squash` for bootc images. bootc requires hardlinks preserved by ostree.
 
 ## Decision Points
 
