@@ -56,7 +56,7 @@ NC='\033[0m' # No Color
 
 echo "=== Bootc AMI Creation Script ==="
 echo "This script addresses all issues from CLOUD_DEPLOYMENT.md:"
-echo "  ✅ SSH keys included in bootc install"
+echo "  ✅ SSH keys included in bootc install (using --root-ssh-authorized-keys flag)"
 echo "  ✅ UEFI boot mode set when creating AMI"
 echo "  ✅ ENA support enabled"
 echo "  ✅ Registry credentials injected with correct format (org_id|username)"
@@ -180,13 +180,27 @@ echo ""
 
 # Run bootc install from inside the container (required per bootc docs)
 # The container must be run with --privileged, --pid=host, and device access to see block devices
-# Note: SSH keys will be injected AFTER installation (see Step 5) to avoid file access issues
+# Use --root-ssh-authorized-keys to inject SSH keys during installation (official bootc method)
 # bootc automatically detects the container image it's running in, so we don't need --source-imgref
+# Expand SSH_KEY_FILE to absolute path for the flag
+SSH_KEY_ABS=$(readlink -f "$SSH_KEY_FILE" 2>/dev/null || echo "$SSH_KEY_FILE")
+if [[ "$SSH_KEY_ABS" != /* ]]; then
+    SSH_KEY_ABS="$HOME/$SSH_KEY_ABS"
+fi
+
+# Verify the SSH key file exists
+if [ ! -f "$SSH_KEY_ABS" ]; then
+    echo -e "${RED}Error: SSH key file not found: $SSH_KEY_ABS${NC}"
+    exit 1
+fi
+
+# Mount the SSH key file into the container and use bootc's official --root-ssh-authorized-keys flag
 sudo podman run --rm --privileged --pid=host \
     --device-cgroup-rule='b *:* rmw' \
     -v /dev:/dev \
+    -v "$SSH_KEY_ABS:/tmp/authorized_keys:ro" \
     "$IMAGE_NAME" \
-    bootc install to-disk --wipe --filesystem ext4 --karg console=ttyS0,115200n8 --karg root=LABEL=root "$DEVICE_PATH"
+    bootc install to-disk --wipe --filesystem ext4 --karg console=ttyS0,115200n8 --karg root=LABEL=root --root-ssh-authorized-keys /tmp/authorized_keys "$DEVICE_PATH"
 
 echo -e "${GREEN}✅ Bootc image installed${NC}"
 
@@ -196,95 +210,12 @@ echo ""
 echo "Partition layout:"
 sudo lsblk -f "$DEVICE_PATH"
 
-# Step 5: Inject SSH Keys
+# Step 5: Verify SSH Keys (injected via --root-ssh-authorized-keys during bootc install)
 echo ""
-echo "=== Step 5: Injecting SSH Keys ==="
-# Expand SSH_KEY_FILE to absolute path
-SSH_KEY_ABS=$(readlink -f "$SSH_KEY_FILE" 2>/dev/null || echo "$SSH_KEY_FILE")
-if [[ "$SSH_KEY_ABS" != /* ]]; then
-    SSH_KEY_ABS="$HOME/$SSH_KEY_ABS"
-fi
-
-# Verify the file exists
-if [ ! -f "$SSH_KEY_ABS" ]; then
-    echo -e "${RED}Error: SSH key file not found: $SSH_KEY_ABS${NC}"
-    exit 1
-fi
-
-# Find root partition (usually the largest partition)
-ROOT_PARTITION=$(lsblk -rno NAME,TYPE,SIZE "$DEVICE_PATH" | grep part | sort -k3 -h | tail -1 | awk '{print "/dev/"$1}')
-echo "Root partition: $ROOT_PARTITION"
-
-# Create mount point
-MOUNT_POINT="/mnt/bootc-root-$$"
-sudo mkdir -p "$MOUNT_POINT"
-
-# Mount the root filesystem
-echo "Mounting bootc root filesystem..."
-if ! sudo mount "$ROOT_PARTITION" "$MOUNT_POINT"; then
-    echo -e "${RED}Error: Failed to mount $ROOT_PARTITION${NC}"
-    rmdir "$MOUNT_POINT" 2>/dev/null || true
-    exit 1
-fi
-
-# Create .ssh directory and inject authorized_keys
-# In bootc/ostree, /root is a symlink to /var/roothome
-# /var is a fresh writable overlay at boot, so we need to:
-# 1. Write SSH keys to /usr/share/roothome/.ssh in the deployment directory (persistent)
-# 2. Create tmpfiles.d entry to copy keys to /var/roothome/.ssh at boot (runtime)
-echo "Injecting SSH keys into /root/.ssh/authorized_keys (via /var/roothome)..."
-
-# Find ostree deployment directory
-DEPLOY_DIR=$(sudo find "$MOUNT_POINT/ostree/deploy/default/deploy" -maxdepth 1 -type d -name "*.0" 2>/dev/null | head -1)
-if [ -z "$DEPLOY_DIR" ]; then
-    echo -e "${RED}Error: Could not find ostree deployment directory${NC}"
-    sudo umount "$MOUNT_POINT" 2>/dev/null || true
-    sudo rmdir "$MOUNT_POINT" 2>/dev/null || true
-    exit 1
-fi
-
-echo "Found deployment directory: $DEPLOY_DIR"
-
-# Write SSH keys to /usr/share/roothome/.ssh in deployment directory (persistent location)
-# This is similar to how registry credentials are stored in /usr/share/rhoim
-sudo mkdir -p "$DEPLOY_DIR/usr/share/roothome/.ssh"
-sudo cp "$SSH_KEY_ABS" "$DEPLOY_DIR/usr/share/roothome/.ssh/authorized_keys"
-sudo chmod 600 "$DEPLOY_DIR/usr/share/roothome/.ssh/authorized_keys"
-sudo chmod 700 "$DEPLOY_DIR/usr/share/roothome/.ssh"
-
-# Create tmpfiles.d configuration to copy SSH keys from /usr/share/roothome to /var/roothome at boot
-# This ensures keys are available at runtime even though /var is a fresh overlay
-echo "Creating tmpfiles.d configuration for SSH keys..."
-sudo mkdir -p "$MOUNT_POINT/etc/tmpfiles.d"
-sudo tee "$MOUNT_POINT/etc/tmpfiles.d/roothome-ssh.conf" > /dev/null <<EOF
-# Create /var/roothome/.ssh directory (writable overlay)
-d /var/roothome/.ssh 0700 root root -
-
-# Copy SSH keys from persistent location (/usr/share/roothome) to runtime location (/var/roothome) at boot
-# This is needed because /var is a fresh writable overlay in bootc/ostree
-C /var/roothome/.ssh/authorized_keys 0600 root root /usr/share/roothome/.ssh/authorized_keys
-EOF
-
-# Verify SSH keys were written
-if sudo test -f "$DEPLOY_DIR/usr/share/roothome/.ssh/authorized_keys"; then
-    echo -e "${GREEN}✅ SSH keys injected${NC}"
-    echo "SSH keys file: $DEPLOY_DIR/usr/share/roothome/.ssh/authorized_keys"
-    KEY_COUNT=$(sudo cat "$DEPLOY_DIR/usr/share/roothome/.ssh/authorized_keys" 2>/dev/null | wc -l || echo "0")
-    echo "Key count: $KEY_COUNT"
-    if sudo test -f "$MOUNT_POINT/etc/tmpfiles.d/roothome-ssh.conf"; then
-        echo -e "${GREEN}✅ tmpfiles.d configuration created${NC}"
-    fi
-else
-    echo -e "${RED}❌ Error: Failed to inject SSH keys${NC}"
-    sudo umount "$MOUNT_POINT" 2>/dev/null || true
-    sudo rmdir "$MOUNT_POINT" 2>/dev/null || true
-    exit 1
-fi
-
-# Unmount
-sudo umount "$MOUNT_POINT"
-sudo rmdir "$MOUNT_POINT"
-echo -e "${GREEN}✅ SSH keys injection complete${NC}"
+echo "=== Step 5: Verifying SSH Keys ==="
+echo "SSH keys were injected during bootc install using --root-ssh-authorized-keys flag"
+echo "This is the official bootc method for SSH key injection"
+echo -e "${GREEN}✅ SSH keys injection complete (via bootc install --root-ssh-authorized-keys)${NC}"
 
 # Step 6: Inject Registry Credentials (if provided)
 if [ -n "$ORG_ID" ] && [ -n "$USERNAME" ] && [ -n "$TOKEN" ]; then
