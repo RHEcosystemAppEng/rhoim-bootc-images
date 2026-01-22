@@ -212,6 +212,50 @@ echo ""
 echo "Partition layout:"
 sudo lsblk -f "$DEVICE_PATH"
 
+# Verify EFI partition contains bootloader files
+echo ""
+echo "=== Verifying EFI Partition ==="
+EFI_PARTITION=$(lsblk -rno NAME,TYPE "$DEVICE_PATH" | grep -E 'part.*EFI|EFI.*part' | awk '{print "/dev/"$1}' | head -1)
+if [ -z "$EFI_PARTITION" ]; then
+    # Try to find EFI partition by size (usually 512M)
+    EFI_PARTITION=$(lsblk -rno NAME,TYPE,SIZE "$DEVICE_PATH" | grep part | grep -E '512M|500M' | awk '{print "/dev/"$1}' | head -1)
+fi
+
+if [ -n "$EFI_PARTITION" ]; then
+    echo "EFI partition: $EFI_PARTITION"
+    EFI_MOUNT="/mnt/efi-verify-$$"
+    sudo mkdir -p "$EFI_MOUNT"
+    if sudo mount "$EFI_PARTITION" "$EFI_MOUNT" 2>/dev/null; then
+        echo "EFI partition mounted successfully"
+        echo "Checking for bootloader files..."
+        if [ -d "$EFI_MOUNT/EFI/redhat" ]; then
+            echo -e "${GREEN}✅ EFI/redhat directory found${NC}"
+            if [ -f "$EFI_MOUNT/EFI/redhat/shimx64.efi" ]; then
+                echo -e "${GREEN}✅ shimx64.efi found${NC}"
+            else
+                echo -e "${YELLOW}⚠️  Warning: shimx64.efi not found${NC}"
+            fi
+            if [ -f "$EFI_MOUNT/EFI/redhat/grubx64.efi" ] || [ -f "$EFI_MOUNT/EFI/redhat/grub.cfg" ]; then
+                echo -e "${GREEN}✅ GRUB files found${NC}"
+            else
+                echo -e "${YELLOW}⚠️  Warning: GRUB files not found${NC}"
+            fi
+            echo "EFI partition contents:"
+            sudo ls -la "$EFI_MOUNT/EFI/redhat/" 2>/dev/null | head -10 || echo "Could not list EFI/redhat contents"
+        else
+            echo -e "${RED}❌ Error: EFI/redhat directory not found${NC}"
+            echo "EFI partition contents:"
+            sudo find "$EFI_MOUNT" -type f 2>/dev/null | head -10 || echo "Could not list EFI partition contents"
+        fi
+        sudo umount "$EFI_MOUNT" 2>/dev/null
+        sudo rmdir "$EFI_MOUNT" 2>/dev/null
+    else
+        echo -e "${YELLOW}⚠️  Warning: Could not mount EFI partition for verification${NC}"
+    fi
+else
+    echo -e "${YELLOW}⚠️  Warning: Could not identify EFI partition${NC}"
+fi
+
 # Step 5: Inject SSH Keys
 echo ""
 echo "=== Step 5: Injecting SSH Keys ==="
