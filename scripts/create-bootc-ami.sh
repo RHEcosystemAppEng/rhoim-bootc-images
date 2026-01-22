@@ -215,10 +215,11 @@ sudo lsblk -f "$DEVICE_PATH"
 # Verify EFI partition contains bootloader files
 echo ""
 echo "=== Verifying EFI Partition ==="
-EFI_PARTITION=$(lsblk -rno NAME,TYPE "$DEVICE_PATH" | grep -E 'part.*EFI|EFI.*part' | awk '{print "/dev/"$1}' | head -1)
+# Find EFI partition by label (EFI-SYSTEM) or by size (512M)
+EFI_PARTITION=$(lsblk -rno NAME,LABEL,SIZE "$DEVICE_PATH" | grep -E 'EFI-SYSTEM|EFI' | awk '{print "/dev/"$1}' | head -1)
 if [ -z "$EFI_PARTITION" ]; then
-    # Try to find EFI partition by size (usually 512M)
-    EFI_PARTITION=$(lsblk -rno NAME,TYPE,SIZE "$DEVICE_PATH" | grep part | grep -E '512M|500M' | awk '{print "/dev/"$1}' | head -1)
+    # Try to find EFI partition by size (usually 512M) - second partition
+    EFI_PARTITION=$(lsblk -rno NAME,TYPE,SIZE "$DEVICE_PATH" | grep part | awk 'NR==2 {print "/dev/"$1}')
 fi
 
 if [ -n "$EFI_PARTITION" ]; then
