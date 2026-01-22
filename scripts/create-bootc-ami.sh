@@ -194,28 +194,15 @@ if [ ! -f "$SSH_KEY_ABS" ]; then
     exit 1
 fi
 
-# Copy SSH key to a temporary location with readable permissions for container
-# The original file has 600 permissions which the container can't read
-# Use sudo to create the temp file with root ownership so container can read it
-TEMP_SSH_KEY="/tmp/bootc-ssh-key-$$"
-sudo cp "$SSH_KEY_ABS" "$TEMP_SSH_KEY"
-sudo chmod 644 "$TEMP_SSH_KEY"
-sudo chown root:root "$TEMP_SSH_KEY"
-trap "sudo rm -f $TEMP_SSH_KEY" EXIT
-
-# Mount the SSH key file into the container and use bootc's official --root-ssh-authorized-keys flag
-# The file must be accessible inside the container at the path we specify
-# Use /root/.ssh/authorized_keys (standard location) instead of /tmp
-echo "Mounting SSH key file: $TEMP_SSH_KEY -> /host-ssh-key:ro in container"
-echo "Using bootc install --root-ssh-authorized-keys flag (official method)"
-echo "Placing SSH key in /root/.ssh/authorized_keys (standard location)"
-# Copy file into container at standard SSH location and verify it's readable before passing to bootc
+# Run bootc install from inside the container (required per bootc docs)
+# The container must be run with --privileged, --pid=host, and device access to see block devices
+# Note: SSH keys will be injected AFTER installation (see Step 5) to avoid file access issues
+# bootc automatically detects the container image it's running in, so we don't need --source-imgref
 sudo podman run --rm --privileged --pid=host \
     --device-cgroup-rule='b *:* rmw' \
     -v /dev:/dev \
-    -v "$TEMP_SSH_KEY:/host-ssh-key:ro" \
     "$IMAGE_NAME" \
-    bash -c "if [ ! -f /host-ssh-key ]; then echo 'ERROR: SSH key file not found at /host-ssh-key'; exit 1; fi && echo 'Creating /root/.ssh directory...' && mkdir -p /root/.ssh && echo 'Copying SSH key to /root/.ssh/authorized_keys...' && cp /host-ssh-key /root/.ssh/authorized_keys && chmod 600 /root/.ssh/authorized_keys && chmod 700 /root/.ssh && echo 'Verifying file is readable...' && cat /root/.ssh/authorized_keys | head -c 50 && echo '...' && echo 'Running bootc install with --root-ssh-authorized-keys flag...' && bootc install to-disk --wipe --filesystem ext4 --karg console=ttyS0,115200n8 --karg root=LABEL=root --root-ssh-authorized-keys /root/.ssh/authorized_keys $DEVICE_PATH"
+    bootc install to-disk --wipe --filesystem ext4 --karg console=ttyS0,115200n8 --karg root=LABEL=root "$DEVICE_PATH"
 
 echo -e "${GREEN}✅ Bootc image installed${NC}"
 
@@ -225,12 +212,77 @@ echo ""
 echo "Partition layout:"
 sudo lsblk -f "$DEVICE_PATH"
 
-# Step 5: Verify SSH Keys (injected via --root-ssh-authorized-keys during bootc install)
+# Step 5: Inject SSH Keys
 echo ""
-echo "=== Step 5: Verifying SSH Keys ==="
-echo "SSH keys were injected during bootc install using --root-ssh-authorized-keys flag"
-echo "This is the official bootc method for SSH key injection"
-echo -e "${GREEN}✅ SSH keys injection complete (via bootc install --root-ssh-authorized-keys)${NC}"
+echo "=== Step 5: Injecting SSH Keys ==="
+# Expand SSH_KEY_FILE to absolute path
+SSH_KEY_ABS=$(readlink -f "$SSH_KEY_FILE" 2>/dev/null || echo "$SSH_KEY_FILE")
+if [[ "$SSH_KEY_ABS" != /* ]]; then
+    SSH_KEY_ABS="$HOME/$SSH_KEY_ABS"
+fi
+
+# Verify the file exists
+if [ ! -f "$SSH_KEY_ABS" ]; then
+    echo -e "${RED}Error: SSH key file not found: $SSH_KEY_ABS${NC}"
+    exit 1
+fi
+
+# Find root partition (usually the largest partition)
+ROOT_PARTITION=$(lsblk -rno NAME,TYPE,SIZE "$DEVICE_PATH" | grep part | sort -k3 -h | tail -1 | awk '{print "/dev/"$1}')
+echo "Root partition: $ROOT_PARTITION"
+
+# Create mount point
+MOUNT_POINT="/mnt/bootc-root-$$"
+sudo mkdir -p "$MOUNT_POINT"
+
+# Mount the root filesystem
+echo "Mounting bootc root filesystem..."
+if ! sudo mount "$ROOT_PARTITION" "$MOUNT_POINT"; then
+    echo -e "${RED}Error: Failed to mount $ROOT_PARTITION${NC}"
+    rmdir "$MOUNT_POINT" 2>/dev/null || true
+    exit 1
+fi
+
+# Create .ssh directory and inject authorized_keys
+# In bootc/ostree, /root is a symlink to /var/roothome
+# /var is a writable overlay that persists, so we write to /var/roothome/.ssh
+echo "Injecting SSH keys into /root/.ssh/authorized_keys (via /var/roothome)..."
+
+# Write to /var/roothome/.ssh (the actual location, since /root -> /var/roothome)
+sudo mkdir -p "$MOUNT_POINT/var/roothome/.ssh"
+sudo cp "$SSH_KEY_ABS" "$MOUNT_POINT/var/roothome/.ssh/authorized_keys"
+sudo chmod 600 "$MOUNT_POINT/var/roothome/.ssh/authorized_keys"
+sudo chmod 700 "$MOUNT_POINT/var/roothome/.ssh"
+
+# Also write to ostree deployment directory to ensure it persists across deployments
+DEPLOY_DIR=$(sudo find "$MOUNT_POINT/ostree/deploy/default/deploy" -maxdepth 1 -type d -name "*.0" 2>/dev/null | head -1)
+if [ -n "$DEPLOY_DIR" ]; then
+    echo "Also writing to deployment directory: $DEPLOY_DIR"
+    sudo mkdir -p "$DEPLOY_DIR/var/roothome/.ssh"
+    sudo cp "$SSH_KEY_ABS" "$DEPLOY_DIR/var/roothome/.ssh/authorized_keys"
+    sudo chmod 600 "$DEPLOY_DIR/var/roothome/.ssh/authorized_keys"
+    sudo chmod 700 "$DEPLOY_DIR/var/roothome/.ssh"
+fi
+
+# Verify SSH keys were written
+if sudo test -f "$MOUNT_POINT/var/roothome/.ssh/authorized_keys"; then
+    echo -e "${GREEN}✅ SSH keys injected${NC}"
+    echo "SSH keys file: $MOUNT_POINT/var/roothome/.ssh/authorized_keys"
+    echo "Key count: $(sudo wc -l < "$MOUNT_POINT/var/roothome/.ssh/authorized_keys")"
+    if [ -n "$DEPLOY_DIR" ] && sudo test -f "$DEPLOY_DIR/var/roothome/.ssh/authorized_keys"; then
+        echo -e "${GREEN}✅ SSH keys also written to deployment directory${NC}"
+    fi
+else
+    echo -e "${RED}❌ Error: Failed to inject SSH keys${NC}"
+    sudo umount "$MOUNT_POINT" 2>/dev/null || true
+    sudo rmdir "$MOUNT_POINT" 2>/dev/null || true
+    exit 1
+fi
+
+# Unmount
+sudo umount "$MOUNT_POINT"
+sudo rmdir "$MOUNT_POINT"
+echo -e "${GREEN}✅ SSH keys injection complete${NC}"
 
 # Step 6: Inject Registry Credentials (if provided)
 if [ -n "$ORG_ID" ] && [ -n "$USERNAME" ] && [ -n "$TOKEN" ]; then
